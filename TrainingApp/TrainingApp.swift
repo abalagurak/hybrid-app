@@ -2175,6 +2175,7 @@ struct ActiveSessionView: View {
     @State private var pendingDeletedExercise: PendingDeletedExercise?
     @State private var undoMessage: String?
     @State private var undoDismissTask: Task<Void, Never>?
+    @State private var sessionNotesExpanded = false
 
     @State private var templateName = ""
 
@@ -2206,17 +2207,34 @@ struct ActiveSessionView: View {
                         .font(.subheadline)
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Session notes")
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    sessionNotesExpanded.toggle()
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    let hasSessionNotes = !(store.state.activeSession?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                                    Image(systemName: hasSessionNotes ? "note.text" : "square.and.pencil")
+                                    Text(hasSessionNotes ? "Edit session note" : "Add session note")
+                                    Spacer()
+                                    Image(systemName: sessionNotesExpanded ? "chevron.up" : "chevron.down")
+                                }
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
-                            TextEditor(
-                                text: Binding(
-                                    get: { store.state.activeSession?.notes ?? "" },
-                                    set: { store.updateActiveSessionNotes($0) }
+                            }
+                            .buttonStyle(.plain)
+
+                            if sessionNotesExpanded {
+                                TextEditor(
+                                    text: Binding(
+                                        get: { store.state.activeSession?.notes ?? "" },
+                                        set: { store.updateActiveSessionNotes($0) }
+                                    )
                                 )
-                            )
-                            .font(.caption2)
-                            .frame(minHeight: 40)
+                                .font(.caption2)
+                                .frame(minHeight: 44, maxHeight: 80)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                            }
 
                             Text("Saved offline \(store.lastSavedAt.formatted(date: .omitted, time: .shortened))")
                                 .font(.caption2)
@@ -2270,6 +2288,8 @@ struct ActiveSessionView: View {
                                     Label("Delete Exercise", systemImage: "trash")
                                 }
                             }
+                            .listRowInsets(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
+                            .listRowBackground(Color.clear)
                         }
 
                         Button {
@@ -2407,8 +2427,17 @@ struct ActiveSessionView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .scrollDismissesKeyboard(.interactively)
                 .navigationTitle(session.name.isEmpty ? "Session" : session.name)
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") {
+                            dismissKeyboard()
+                        }
+                    }
+                }
                 .sheet(isPresented: $showExercisePicker) {
                     ExercisePickerView(
                         exercises: store.state.exerciseLibrary,
@@ -2616,8 +2645,6 @@ struct ExerciseCardView: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var exerciseGridHeader: some View {
@@ -2686,6 +2713,45 @@ struct SetRowView: View {
         return String(format: "%.1f", weight)
     }
 
+    private var weightTextBinding: Binding<String> {
+        Binding(
+            get: {
+                guard set.weight > 0 else { return "" }
+                return formatWeight(set.weight)
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    onWeightChange(0)
+                    return
+                }
+                let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+                if let parsed = Double(normalized) {
+                    onWeightChange(max(0, parsed))
+                }
+            }
+        )
+    }
+
+    private var repsTextBinding: Binding<String> {
+        Binding(
+            get: {
+                guard set.reps > 0 else { return "" }
+                return "\(set.reps)"
+            },
+            set: { newValue in
+                let digits = newValue.filter(\.isWholeNumber)
+                guard !digits.isEmpty else {
+                    onRepsChange(0)
+                    return
+                }
+                if let parsed = Int(digits) {
+                    onRepsChange(max(0, parsed))
+                }
+            }
+        )
+    }
+
     private var rowContent: some View {
         HStack(spacing: 8) {
             Menu {
@@ -2716,14 +2782,7 @@ struct SetRowView: View {
                 .foregroundStyle(.white.opacity(0.3))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            TextField(
-                "0",
-                value: Binding(
-                    get: { set.weight },
-                    set: { onWeightChange(max(0, $0)) }
-                ),
-                format: .number.precision(.fractionLength(0...1))
-            )
+            TextField("0", text: weightTextBinding)
             .font(.subheadline.weight(.semibold).monospacedDigit())
             .keyboardType(.decimalPad)
             .multilineTextAlignment(.center)
@@ -2733,14 +2792,7 @@ struct SetRowView: View {
                     .fill(Color.white.opacity(0.08))
             )
 
-            TextField(
-                "0",
-                value: Binding(
-                    get: { set.reps },
-                    set: { onRepsChange(max(0, $0)) }
-                ),
-                format: .number
-            )
+            TextField("0", text: repsTextBinding)
             .font(.subheadline.weight(.semibold).monospacedDigit())
             .keyboardType(.numberPad)
             .multilineTextAlignment(.center)
@@ -2874,6 +2926,29 @@ struct ExercisePickerView: View {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    private var customWeightTextBinding: Binding<String> {
+        Binding(
+            get: {
+                guard customWeight > 0 else { return "" }
+                if abs(customWeight.rounded() - customWeight) < 0.001 {
+                    return String(format: "%.0f", customWeight)
+                }
+                return String(format: "%.1f", customWeight)
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    customWeight = 0
+                    return
+                }
+                let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+                if let parsed = Double(normalized) {
+                    customWeight = max(0, parsed)
+                }
+            }
+        )
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -2928,11 +3003,7 @@ struct ExercisePickerView: View {
                             Stepper("Sets: \(customSets)", value: $customSets, in: 1...12)
                             Stepper("Reps: \(customReps)", value: $customReps, in: 0...50)
 
-                            TextField(
-                                "Weight (lb)",
-                                value: $customWeight,
-                                format: .number.precision(.fractionLength(0...1))
-                            )
+                            TextField("Weight (lb)", text: customWeightTextBinding)
                             .keyboardType(.decimalPad)
                         }
 
@@ -2992,11 +3063,18 @@ struct ExercisePickerView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .searchable(text: $searchText)
             .navigationTitle("Exercise Library")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Close") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        dismissKeyboard()
+                    }
                 }
             }
             .onChange(of: selectedCategory) { _, newValue in
@@ -3089,6 +3167,13 @@ struct RunEntryEditorView: View {
                             saveRun()
                         }
                         .disabled(saveDisabled)
+                    }
+                }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        dismissKeyboard()
                     }
                 }
             }
@@ -4615,6 +4700,12 @@ struct BodyWeightLogSheet: View {
                     }
                     .disabled(!canSave)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        dismissKeyboard()
+                    }
+                }
             }
         }
     }
@@ -4769,6 +4860,10 @@ extension View {
 }
 
 // MARK: - Formatting
+
+func dismissKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
 
 func formatDuration(_ seconds: Int) -> String {
     let clamped = max(0, seconds)
