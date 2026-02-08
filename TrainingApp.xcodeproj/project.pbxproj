@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F1A0000101B1000000000019 /* InsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000020 /* InsightsView.swift */; };
+		F1A0000101B1000000000021 /* TrainingLoadCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000022 /* TrainingLoadCalculator.swift */; };
 		F1A0000101B1000000000001 /* TrainingApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000002 /* TrainingApp.swift */; };
 /* End PBXBuildFile section */
 
@@ -14,6 +16,8 @@
 		F1A0000101B1000000000002 /* TrainingApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingApp.swift; sourceTree = "<group>"; };
 		F1A0000101B1000000000003 /* TrainingApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TrainingApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F1A0000101B1000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F1A0000101B1000000000020 /* InsightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightsView.swift; sourceTree = "<group>"; };
+		F1A0000101B1000000000022 /* TrainingLoadCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingLoadCalculator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -47,6 +51,8 @@
 			isa = PBXGroup;
 			children = (
 				F1A0000101B1000000000002 /* TrainingApp.swift */,
+				F1A0000101B1000000000020 /* InsightsView.swift */,
+				F1A0000101B1000000000022 /* TrainingLoadCalculator.swift */,
 				F1A0000101B1000000000004 /* Info.plist */,
 			);
 			path = TrainingApp;
@@ -120,6 +126,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F1A0000101B1000000000019 /* InsightsView.swift in Sources */,
+				F1A0000101B1000000000021 /* TrainingLoadCalculator.swift in Sources */,
 				F1A0000101B1000000000001 /* TrainingApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

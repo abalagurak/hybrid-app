@@ -4,6 +4,10 @@ import CoreLocation
 import MapKit
 import UIKit
 
+private extension Color {
+    static let appAccent = Color(red: 0.8, green: 48.0 / 255.0, blue: 0.0)
+}
+
 @main
 struct TrainingAppApp: App {
     @StateObject private var store = TrainingStore()
@@ -13,7 +17,7 @@ struct TrainingAppApp: App {
             RootView()
                 .environmentObject(store)
                 .preferredColorScheme(store.state.theme.colorScheme)
-                .tint(.mint)
+                .tint(.appAccent)
         }
     }
 }
@@ -159,7 +163,7 @@ enum SetStyle: String, Codable, CaseIterable, Identifiable {
         case .warmUp:
             return .orange
         case .working:
-            return .mint
+            return Color.appAccent
         case .failure:
             return .red
         case .dropSet:
@@ -1786,7 +1790,7 @@ struct RunRouteMapView: View {
             } else {
                 Map(initialPosition: .region(regionForCoordinates(coordinates))) {
                     MapPolyline(coordinates: coordinates)
-                        .stroke(Color.mint, lineWidth: 4)
+                        .stroke(Color.appAccent, lineWidth: 4)
                 }
             }
         }
@@ -1889,7 +1893,7 @@ struct AppBackgroundView: View {
             .ignoresSafeArea()
 
             Circle()
-                .fill(Color.mint.opacity(0.18))
+                .fill(Color.appAccent.opacity(0.18))
                 .frame(width: 260, height: 260)
                 .blur(radius: 40)
                 .offset(x: -140, y: -260)
@@ -1962,6 +1966,7 @@ struct MainTabsView: View {
         case templates
         case history
         case workout
+        case insights
         case progress
         case settings
     }
@@ -2000,12 +2005,12 @@ struct MainTabsView: View {
             .badge(store.state.activeSession == nil ? 0 : 1)
 
             NavigationStack {
-                ProgressView()
+                InsightsView()
             }
             .tabItem {
-                Label("Progress", systemImage: "chart.xyaxis.line")
+                Label("Insights", systemImage: "chart.bar")
             }
-            .tag(MainTab.progress)
+            .tag(MainTab.insights)
 
             NavigationStack {
                 SettingsView()
@@ -2014,6 +2019,9 @@ struct MainTabsView: View {
                 Label("Settings", systemImage: "gearshape.fill")
             }
             .tag(MainTab.settings)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToWorkoutTab)) { _ in
+            selectedTab = .workout
         }
     }
 }
@@ -2338,10 +2346,10 @@ struct ActiveSessionView: View {
                                 .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .padding(.vertical, 10)
-                                .foregroundStyle(.mint)
+                                .foregroundStyle(Color.appAccent)
                                 .background(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(Color.mint.opacity(0.9), lineWidth: 1.2)
+                                        .stroke(Color.appAccent.opacity(0.9), lineWidth: 1.2)
                                 )
                         }
                         .buttonStyle(.plain)
@@ -2841,7 +2849,7 @@ struct SetRowView: View {
                     .frame(width: 28, height: 32)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(set.isCompleted ? Color.mint.opacity(0.75) : Color.white.opacity(0.08))
+                            .fill(set.isCompleted ? Color.appAccent.opacity(0.75) : Color.white.opacity(0.08))
                     )
             }
             .buttonStyle(.plain)
@@ -3070,7 +3078,7 @@ struct ExercisePickerView: View {
                                 Spacer()
                                 if allowsMultiSelect {
                                     Image(systemName: selectedExerciseIDs.contains(exercise.id) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(selectedExerciseIDs.contains(exercise.id) ? .mint : .secondary)
+                                        .foregroundStyle(selectedExerciseIDs.contains(exercise.id) ? Color.appAccent : .secondary)
                                 }
                                 if exercise.isCustom {
                                     Text("Custom")
@@ -3382,10 +3390,10 @@ struct RunEntryEditorView: View {
                     .font(.headline.weight(.semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .foregroundStyle(tracker.isTracking ? .red : .mint)
+                    .foregroundStyle(tracker.isTracking ? .red : Color.appAccent)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke((tracker.isTracking ? Color.red : Color.mint).opacity(0.9), lineWidth: 1.3)
+                            .stroke((tracker.isTracking ? Color.red : Color.appAccent).opacity(0.9), lineWidth: 1.3)
                     )
             }
             .buttonStyle(.plain)
@@ -3945,7 +3953,7 @@ struct TemplatesView: View {
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(isSelected ? Color.mint.opacity(0.25) : Color.secondary.opacity(0.16), in: Capsule())
+                .background(isSelected ? Color.appAccent.opacity(0.25) : Color.secondary.opacity(0.16), in: Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -4522,13 +4530,13 @@ struct ProgressView: View {
                         x: .value("Date", point.date),
                         y: .value("Volume", point.volume)
                     )
-                    .foregroundStyle(.mint)
+                    .foregroundStyle(Color.appAccent)
 
                     PointMark(
                         x: .value("Date", point.date),
                         y: .value("Volume", point.volume)
                     )
-                    .foregroundStyle(.mint)
+                    .foregroundStyle(Color.appAccent)
                 }
                 .frame(height: 220)
             }
@@ -4602,7 +4610,7 @@ struct ProgressView: View {
                     if let change = store.bodyWeightChange(days: 7) {
                         Text("7-day: \(formatSignedWeightChange(change, unit: units))")
                             .font(.caption)
-                            .foregroundStyle(change > 0 ? .orange : (change < 0 ? .mint : .secondary))
+                            .foregroundStyle(change > 0 ? .orange : (change < 0 ? Color.appAccent : .secondary))
                     } else {
                         Text("7-day: Not enough data")
                             .font(.caption)
