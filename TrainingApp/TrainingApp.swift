@@ -1955,21 +1955,32 @@ struct AccountSetupView: View {
 }
 
 struct MainTabsView: View {
-    var body: some View {
-        TabView {
-            NavigationStack {
-                HomeView()
-            }
-            .tabItem {
-                Label("Home", systemImage: "house.fill")
-            }
+    @EnvironmentObject private var store: TrainingStore
+    @State private var selectedTab: MainTab = .workout
 
+    private enum MainTab: Hashable {
+        case templates
+        case history
+        case workout
+        case progress
+        case settings
+    }
+
+    private var workoutTabSymbol: String {
+        store.state.activeSession == nil
+            ? "figure.strengthtraining.traditional.circle"
+            : "figure.strengthtraining.traditional.circle.fill"
+    }
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
             NavigationStack {
                 TemplatesView()
             }
             .tabItem {
                 Label("Templates", systemImage: "square.grid.2x2.fill")
             }
+            .tag(MainTab.templates)
 
             NavigationStack {
                 HistoryView()
@@ -1977,6 +1988,16 @@ struct MainTabsView: View {
             .tabItem {
                 Label("History", systemImage: "clock.arrow.circlepath")
             }
+            .tag(MainTab.history)
+
+            NavigationStack {
+                WorkoutView()
+            }
+            .tabItem {
+                Label("Workout", systemImage: workoutTabSymbol)
+            }
+            .tag(MainTab.workout)
+            .badge(store.state.activeSession == nil ? 0 : 1)
 
             NavigationStack {
                 ProgressView()
@@ -1984,6 +2005,7 @@ struct MainTabsView: View {
             .tabItem {
                 Label("Progress", systemImage: "chart.xyaxis.line")
             }
+            .tag(MainTab.progress)
 
             NavigationStack {
                 SettingsView()
@@ -1991,11 +2013,12 @@ struct MainTabsView: View {
             .tabItem {
                 Label("Settings", systemImage: "gearshape.fill")
             }
+            .tag(MainTab.settings)
         }
     }
 }
 
-struct HomeView: View {
+struct WorkoutView: View {
     @EnvironmentObject private var store: TrainingStore
     @State private var openActiveSession = false
 
@@ -2018,7 +2041,7 @@ struct HomeView: View {
             }
             .padding()
         }
-        .navigationTitle("Training")
+        .navigationTitle("Workout")
         .navigationDestination(isPresented: $openActiveSession) {
             ActiveSessionView()
         }
@@ -2164,9 +2187,9 @@ struct ActiveSessionView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var showExercisePicker = false
-    @State private var showRunEditor = false
-    @State private var runEditorMode: RunMode = .manual
-    @State private var showSaveTemplatePrompt = false
+    @State private var runEditorRoute: RunEditorRoute?
+    @State private var showFinishAlert = false
+    @State private var showFinishTemplatePrompt = false
     @State private var showDiscardSessionAlert = false
     @State private var showCompletionAlert = false
     @State private var completionMessage = ""
@@ -2188,6 +2211,22 @@ struct ActiveSessionView: View {
     private struct PendingDeletedExercise {
         var exercise: LoggedExercise
         var index: Int
+    }
+
+    private enum RunEditorRoute: String, Identifiable {
+        case manual
+        case gps
+
+        var id: String { rawValue }
+
+        var mode: RunMode {
+            switch self {
+            case .manual:
+                return .manual
+            case .gps:
+                return .gps
+            }
+        }
     }
 
     var body: some View {
@@ -2342,8 +2381,7 @@ struct ActiveSessionView: View {
                             let alternateRunMode: RunMode = preferredRunMode == .manual ? .gps : .manual
 
                             Button {
-                                runEditorMode = preferredRunMode
-                                showRunEditor = true
+                                runEditorRoute = preferredRunMode == .manual ? .manual : .gps
                             } label: {
                                 Label(
                                     preferredRunMode == .manual ? "Add Manual Run" : "Start GPS Run",
@@ -2354,8 +2392,7 @@ struct ActiveSessionView: View {
                             .buttonStyle(.borderedProminent)
 
                             Button {
-                                runEditorMode = alternateRunMode
-                                showRunEditor = true
+                                runEditorRoute = alternateRunMode == .manual ? .manual : .gps
                             } label: {
                                 Label(
                                     alternateRunMode == .manual ? "Add Manual Run" : "Start GPS Run",
@@ -2370,50 +2407,21 @@ struct ActiveSessionView: View {
 
                     Section {
                         Button {
-                            templateName = session.name.isEmpty ? "New Template" : session.name
-                            showSaveTemplatePrompt = true
-                        } label: {
-                            Text("Save as Template")
-                                .font(.headline.weight(.semibold))
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.vertical, 10)
-                                .foregroundStyle(.blue)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(Color.blue.opacity(0.9), lineWidth: 1.2)
-                                )
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            completeSession()
+                            showFinishAlert = true
                         } label: {
                             Text("Finish Session")
-                                .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.vertical, 10)
-                                .foregroundStyle(.green)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(Color.green.opacity(0.9), lineWidth: 1.2)
-                                )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderedProminent)
 
                         Button {
                             showDiscardSessionAlert = true
                         } label: {
                             Text("Discard Session")
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(.red)
                                 .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(Color.red.opacity(0.9), lineWidth: 1.2)
-                                )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.bordered)
+                        .tint(.red)
                     }
                 }
                 .overlay(alignment: .bottom) {
@@ -2454,10 +2462,10 @@ struct ActiveSessionView: View {
                         }
                     )
                 }
-                .sheet(isPresented: $showRunEditor) {
+                .sheet(item: $runEditorRoute) { route in
                     RunEntryEditorView(
                         initialRun: store.state.activeSession?.run,
-                        preferredMode: runEditorMode
+                        preferredMode: route.mode
                     ) {
                         store.setRunEntry($0)
                     }
@@ -2471,14 +2479,28 @@ struct ActiveSessionView: View {
                 } message: {
                     Text("This session and all unsaved changes will be removed.")
                 }
-                .alert("Save Template", isPresented: $showSaveTemplatePrompt) {
-                    TextField("Template name", text: $templateName)
+                .alert("Finish Session", isPresented: $showFinishAlert) {
                     Button("Cancel", role: .cancel) {}
-                    Button("Save") {
-                        store.createTemplateFromActiveSession(named: templateName, folderID: nil)
+                    Button("Finish Session") {
+                        completeSession()
+                    }
+                    Button("Finish + Save as Template") {
+                        templateName = session.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? "New Template"
+                            : session.name
+                        showFinishTemplatePrompt = true
                     }
                 } message: {
-                    Text("You can move it into a folder from the Templates tab.")
+                    Text("Do you want to save this workout as a template before finishing?")
+                }
+                .alert("Save Template Before Finish", isPresented: $showFinishTemplatePrompt) {
+                    TextField("Template name", text: $templateName)
+                    Button("Cancel", role: .cancel) {}
+                    Button("Save + Finish") {
+                        completeSession(templateNameToSave: templateName)
+                    }
+                } message: {
+                    Text("A template will be saved first, then the session will be completed.")
                 }
             } else {
                 ContentUnavailableView("No Active Session", systemImage: "figure.strengthtraining.traditional")
@@ -2495,17 +2517,19 @@ struct ActiveSessionView: View {
     }
 
     private func sessionHeader(startedAt: Date) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .center, spacing: 6) {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let elapsed = max(0, Int(context.date.timeIntervalSince(startedAt)))
                 Text(formatDuration(elapsed))
                     .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
             Text(startedAt.formatted(date: .complete, time: .shortened))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -2516,7 +2540,15 @@ struct ActiveSessionView: View {
         return String(format: "%d:%02d /mi", minutes, seconds)
     }
 
-    private func completeSession() {
+    private func completeSession(templateNameToSave: String? = nil) {
+        if let templateNameToSave {
+            let cleanTemplateName = templateNameToSave.trimmingCharacters(in: .whitespacesAndNewlines)
+            store.createTemplateFromActiveSession(
+                named: cleanTemplateName.isEmpty ? "New Template" : cleanTemplateName,
+                folderID: nil
+            )
+        }
+
         guard let completed = store.completeActiveSession() else { return }
         if completed.achievements.isEmpty {
             completionMessage = "Session saved. No new PRs this time."
