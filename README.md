@@ -2,12 +2,6 @@
 
 Offline-first lifting + running training logger built with SwiftUI.
 
-## Open
-
-1. Open `/Users/alexbalagurakpersonal/Documents/dev/training-app/TrainingApp.xcodeproj` in Xcode.
-2. Select the `TrainingApp` scheme.
-3. Run on iPhone simulator or device.
-
 ## What is implemented
 
 - Account creation flow (local, on-device).
