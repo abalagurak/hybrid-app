@@ -1674,6 +1674,7 @@ final class GPSRunTracker: NSObject, ObservableObject, CLLocationManagerDelegate
     private var lastLocation: CLLocation?
     private var startDate: Date?
     private var tickTimer: Timer?
+    private var pendingStartAfterAuthorization = false
 
     override init() {
         authorizationStatus = manager.authorizationStatus
@@ -1681,7 +1682,8 @@ final class GPSRunTracker: NSObject, ObservableObject, CLLocationManagerDelegate
         manager.delegate = self
         manager.activityType = .fitness
         manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = 5
+        manager.distanceFilter = 3
+        manager.pausesLocationUpdatesAutomatically = false
     }
 
     var canTrack: Bool {
@@ -1694,10 +1696,16 @@ final class GPSRunTracker: NSObject, ObservableObject, CLLocationManagerDelegate
 
     func startTracking() {
         if authorizationStatus == .notDetermined {
+            pendingStartAfterAuthorization = true
             requestPermission()
             return
         }
-        guard canTrack else { return }
+        guard canTrack else {
+            pendingStartAfterAuthorization = false
+            return
+        }
+
+        pendingStartAfterAuthorization = false
 
         distanceMeters = 0
         elapsedSeconds = 0
@@ -1715,10 +1723,12 @@ final class GPSRunTracker: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         manager.startUpdatingLocation()
+        manager.requestLocation()
     }
 
     func stopTracking() {
         isTracking = false
+        pendingStartAfterAuthorization = false
         manager.stopUpdatingLocation()
         tickTimer?.invalidate()
         tickTimer = nil
@@ -1727,6 +1737,11 @@ final class GPSRunTracker: NSObject, ObservableObject, CLLocationManagerDelegate
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         DispatchQueue.main.async {
             self.authorizationStatus = manager.authorizationStatus
+            if self.pendingStartAfterAuthorization, self.canTrack {
+                self.startTracking()
+            } else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
+                self.pendingStartAfterAuthorization = false
+            }
         }
     }
 
@@ -1734,11 +1749,12 @@ final class GPSRunTracker: NSObject, ObservableObject, CLLocationManagerDelegate
         guard isTracking else { return }
 
         for location in locations {
-            guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 50 else { continue }
+            guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 120 else { continue }
+            guard location.timestamp.timeIntervalSinceNow > -30 else { continue }
 
             if let previous = lastLocation {
                 let increment = location.distance(from: previous)
-                if increment > 0, increment < 500 {
+                if increment > 0.5, increment < 250 {
                     DispatchQueue.main.async {
                         self.distanceMeters += increment
                     }
@@ -2196,6 +2212,7 @@ struct ActiveSessionView: View {
 
     @State private var showExercisePicker = false
     @State private var runEditorRoute: RunEditorRoute?
+    @StateObject private var gpsTracker = GPSRunTracker()
     @State private var showFinishAlert = false
     @State private var showFinishTemplatePrompt = false
     @State private var showDiscardSessionAlert = false
@@ -2300,6 +2317,7 @@ struct ActiveSessionView: View {
                                 onDeleteSet: { setID in
                                     guard let setIndex = exercise.sets.firstIndex(where: { $0.id == setID }) else { return }
                                     let set = exercise.sets[setIndex]
+                                    Haptics.warning()
                                     pendingDeletedSet = PendingDeletedSet(
                                         exerciseID: exercise.id,
                                         set: set,
@@ -2324,6 +2342,7 @@ struct ActiveSessionView: View {
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     guard let index = session.exercises.firstIndex(where: { $0.id == exercise.id }) else { return }
+                                    Haptics.warning()
                                     pendingDeletedExercise = PendingDeletedExercise(
                                         exercise: exercise,
                                         index: index
@@ -2387,24 +2406,34 @@ struct ActiveSessionView: View {
                         VStack(spacing: 8) {
                             let preferredRunMode = store.state.preferences.defaultRunMode
                             let alternateRunMode: RunMode = preferredRunMode == .manual ? .gps : .manual
+                            let preferredRunLabel = preferredRunMode == .manual
+                                ? "Add Manual Run"
+                                : (gpsTracker.isTracking ? "Resume GPS Run" : "Start GPS Run")
+                            let alternateRunLabel = alternateRunMode == .manual
+                                ? "Add Manual Run"
+                                : (gpsTracker.isTracking ? "Resume GPS Run" : "Start GPS Run")
+                            let preferredRunIcon = preferredRunMode == .manual ? "figure.run.circle" : "location.circle.fill"
+                            let alternateRunIcon = alternateRunMode == .manual ? "figure.run.circle" : "location.circle.fill"
 
                             Button {
+                                Haptics.selection()
                                 runEditorRoute = preferredRunMode == .manual ? .manual : .gps
                             } label: {
                                 Label(
-                                    preferredRunMode == .manual ? "Add Manual Run" : "Start GPS Run",
-                                    systemImage: preferredRunMode == .manual ? "figure.run.circle" : "location.circle.fill"
+                                    preferredRunLabel,
+                                    systemImage: preferredRunIcon
                                 )
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
 
                             Button {
+                                Haptics.selection()
                                 runEditorRoute = alternateRunMode == .manual ? .manual : .gps
                             } label: {
                                 Label(
-                                    alternateRunMode == .manual ? "Add Manual Run" : "Start GPS Run",
-                                    systemImage: alternateRunMode == .manual ? "figure.run.circle" : "location.circle.fill"
+                                    alternateRunLabel,
+                                    systemImage: alternateRunIcon
                                 )
                                     .frame(maxWidth: .infinity)
                             }
@@ -2442,6 +2471,13 @@ struct ActiveSessionView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
+                .safeAreaInset(edge: .bottom) {
+                    if shouldShowMinimizedGPSRunBar {
+                        minimizedGPSRunBar
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, 6)
+                    }
+                }
                 .listStyle(.insetGrouped)
                 .scrollDismissesKeyboard(.interactively)
                 .navigationTitle(session.name.isEmpty ? "Session" : session.name)
@@ -2473,14 +2509,24 @@ struct ActiveSessionView: View {
                 .sheet(item: $runEditorRoute) { route in
                     RunEntryEditorView(
                         initialRun: store.state.activeSession?.run,
-                        preferredMode: route.mode
+                        preferredMode: route.mode,
+                        tracker: gpsTracker,
+                        onMinimizeGPS: {
+                            guard route.mode == .gps else { return }
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                runEditorRoute = nil
+                            }
+                        }
                     ) {
                         store.setRunEntry($0)
                     }
+                    .interactiveDismissDisabled(route.mode == .gps && gpsTracker.isTracking)
                 }
                 .alert("Confirm Discard", isPresented: $showDiscardSessionAlert) {
                     Button("Cancel", role: .cancel) {}
                     Button("Discard", role: .destructive) {
+                        Haptics.warning()
+                        gpsTracker.stopTracking()
                         store.discardActiveSession()
                         dismiss()
                     }
@@ -2548,7 +2594,82 @@ struct ActiveSessionView: View {
         return String(format: "%d:%02d /mi", minutes, seconds)
     }
 
+    private var shouldShowMinimizedGPSRunBar: Bool {
+        gpsTracker.isTracking && runEditorRoute?.mode != .gps
+    }
+
+    private var minimizedGPSDistanceMiles: Double {
+        gpsTracker.distanceMeters * 0.000621371
+    }
+
+    private var minimizedGPSPaceText: String {
+        guard minimizedGPSDistanceMiles > 0, gpsTracker.elapsedSeconds > 0 else { return "--:-- /mi" }
+        let secondsPerMile = Int((Double(gpsTracker.elapsedSeconds) / minimizedGPSDistanceMiles).rounded())
+        return formatPacePerMile(secondsPerMile)
+    }
+
+    private var minimizedGPSRunBar: some View {
+        Button {
+            expandMinimizedGPSRun()
+        } label: {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(Color.appAccent.opacity(0.24))
+                    .frame(width: 38, height: 38)
+                    .overlay {
+                        Image(systemName: "figure.run")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.appAccent)
+                    }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Run in progress")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("\(formatDuration(gpsTracker.elapsedSeconds)) · \(minimizedGPSDistanceMiles, specifier: "%.2f") mi · \(minimizedGPSPaceText)")
+                        .font(.subheadline.monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.up")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 10)
+                .onEnded { value in
+                    guard abs(value.translation.width) < 90 else { return }
+                    if value.translation.height < -18 {
+                        expandMinimizedGPSRun()
+                    }
+                }
+        )
+    }
+
+    private func expandMinimizedGPSRun() {
+        Haptics.selection()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            runEditorRoute = .gps
+        }
+    }
+
     private func completeSession(templateNameToSave: String? = nil) {
+        if gpsTracker.isTracking {
+            gpsTracker.stopTracking()
+        }
+
         if let templateNameToSave {
             let cleanTemplateName = templateNameToSave.trimmingCharacters(in: .whitespacesAndNewlines)
             store.createTemplateFromActiveSession(
@@ -2564,6 +2685,7 @@ struct ActiveSessionView: View {
             let lines = completed.achievements.prefix(4).map { "• \($0.title): \($0.valueText)" }
             completionMessage = "Session saved with \(completed.achievements.count) achievement\(completed.achievements.count == 1 ? "" : "s").\n\n" + lines.joined(separator: "\n")
         }
+        Haptics.success()
         showCompletionAlert = true
     }
 
@@ -2584,6 +2706,7 @@ struct ActiveSessionView: View {
         } else if let pendingDeletedExercise {
             store.insertActiveExercise(pendingDeletedExercise.exercise, at: pendingDeletedExercise.index)
         }
+        Haptics.success()
         clearUndoState()
     }
 
@@ -3162,6 +3285,8 @@ struct RunEntryEditorView: View {
 
     let initialRun: RunEntry?
     let preferredMode: RunMode
+    @ObservedObject var tracker: GPSRunTracker
+    var onMinimizeGPS: () -> Void
     let onSave: (RunEntry) -> Void
 
     @State private var manualDistanceInput = ""
@@ -3174,8 +3299,9 @@ struct RunEntryEditorView: View {
     @State private var gpsSummaryDurationSeconds: Int = 0
     @State private var gpsSummaryRoute: [CoordinatePoint] = []
     @State private var gpsSummarySplits: [RunSplit] = []
+    @State private var showLiveRoutePreview = false
+    @State private var gpsSummaryNotesExpanded = false
     @State private var suppressManualRecalc = false
-    @StateObject private var tracker = GPSRunTracker()
 
     private enum ManualInputField {
         case distance
@@ -3196,7 +3322,9 @@ struct RunEntryEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") {
-                        tracker.stopTracking()
+                        if preferredMode == .gps {
+                            tracker.stopTracking()
+                        }
                         dismiss()
                     }
                 }
@@ -3224,6 +3352,11 @@ struct RunEntryEditorView: View {
             }
         }
         .onAppear {
+            showLiveRoutePreview = false
+            gpsSummaryNotesExpanded = false
+            if preferredMode == .gps, tracker.isTracking {
+                showGPSSummary = false
+            }
             if let initialRun {
                 notes = initialRun.notes
                 if initialRun.mode == .manual, preferredMode == .manual {
@@ -3238,18 +3371,13 @@ struct RunEntryEditorView: View {
                         manualPaceInput = formatDecimal(pace, maxFraction: 2)
                     }
                 }
-                if initialRun.mode == .gps, preferredMode == .gps {
+                if initialRun.mode == .gps, preferredMode == .gps, !tracker.isTracking {
                     gpsSummaryDistanceMiles = initialRun.distanceMiles
                     gpsSummaryDurationSeconds = initialRun.durationSeconds
                     gpsSummaryRoute = initialRun.route ?? []
                     gpsSummarySplits = initialRun.splits
                     showGPSSummary = initialRun.distanceMiles > 0 || initialRun.durationSeconds > 0
                 }
-            }
-        }
-        .onDisappear {
-            if preferredMode == .gps {
-                tracker.stopTracking()
             }
         }
         .onChange(of: manualDistanceInput) { _, _ in
@@ -3314,99 +3442,102 @@ struct RunEntryEditorView: View {
     }
 
     private var gpsRunScreen: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                if tracker.authorizationStatus == .denied || tracker.authorizationStatus == .restricted {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Location Access Needed", systemImage: "location.slash.fill")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Enable location access in iOS Settings to track GPS distance and pace.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                } else if tracker.authorizationStatus == .notDetermined {
-                    Button("Allow Location") {
-                        tracker.requestPermission()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if showGPSSummary {
-                    gpsSummaryCard
-                } else {
-                    gpsLiveCard
-                }
-            }
-            .padding()
-        }
-        .background(
+        ZStack {
             LinearGradient(
                 colors: [
-                    Color.black.opacity(0.92),
-                    Color(red: 0.06, green: 0.08, blue: 0.12)
+                    Color.black.opacity(0.96),
+                    Color(red: 0.04, green: 0.05, blue: 0.08)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
-        )
-    }
 
-    private var gpsLiveCard: some View {
-        VStack(spacing: 12) {
-            VStack(spacing: 6) {
-                Text("Live GPS Run")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(formatDuration(tracker.elapsedSeconds))
-                    .font(.system(size: 46, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.white)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-            HStack(spacing: 10) {
-                gpsMetricTile(title: "Distance", value: String(format: "%.2f", gpsLiveDistanceMiles), unit: "mi")
-                gpsMetricTile(title: "Avg Pace", value: gpsLivePaceText, unit: "/mi")
-            }
-
-            gpsMetricTile(title: "Current Split", value: "\(currentSplitIndex)", unit: "")
-
-            Button {
-                if tracker.isTracking {
-                    endGPSRunAndShowSummary()
-                } else if tracker.authorizationStatus == .notDetermined {
-                    tracker.requestPermission()
-                } else {
-                    tracker.startTracking()
+            if showGPSSummary {
+                ScrollView {
+                    VStack(spacing: 14) {
+                        gpsPermissionBanner
+                        gpsSummaryCard
+                    }
+                    .padding()
                 }
-            } label: {
-                Text(tracker.isTracking ? "End Run" : "Start GPS Run")
-                    .font(.headline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundStyle(tracker.isTracking ? .red : Color.appAccent)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke((tracker.isTracking ? Color.red : Color.appAccent).opacity(0.9), lineWidth: 1.3)
-                    )
+            } else {
+                VStack(spacing: 20) {
+                    gpsPermissionBanner
+
+                    if canMinimizeLiveGPSRun {
+                        Text("Swipe down to minimize")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.62))
+                    }
+
+                    Text(formatDuration(tracker.elapsedSeconds))
+                        .font(.system(size: 68, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    VStack(spacing: 8) {
+                        Text(gpsLivePaceText)
+                            .font(.system(size: 76, weight: .bold, design: .rounded).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.45)
+                        Text("Avg. pace (/mi)")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+                    }
+
+                    VStack(spacing: 8) {
+                        Text(String(format: "%.2f", gpsLiveDistanceMiles))
+                            .font(.system(size: 88, weight: .bold, design: .rounded).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.45)
+                        Text("Distance (mi)")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+                    }
+
+                    VStack(spacing: 8) {
+                        HStack(spacing: 10) {
+                            ForEach(0..<3, id: \.self) { index in
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.white.opacity(0.24))
+                                    .frame(height: 34)
+                                    .overlay {
+                                        Text(liveSplitText(at: index))
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.white.opacity(0.85))
+                                    }
+                            }
+                        }
+                        Text("Splits (mi)")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.76))
+                    }
+
+                    if showLiveRoutePreview {
+                        RunRouteMapView(route: tracker.route)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .safeAreaInset(edge: .bottom) {
+                    gpsBottomDock
+                }
+                .simultaneousGesture(gpsMinimizeGesture)
             }
-            .buttonStyle(.plain)
-            .disabled(!tracker.canTrack && tracker.authorizationStatus != .notDetermined)
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var gpsSummaryCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Run Complete")
                 .font(.title3.weight(.bold))
+                .foregroundStyle(.white)
 
             HStack(spacing: 10) {
                 gpsMetricTile(title: "Distance", value: String(format: "%.2f", gpsSummaryDistanceMiles), unit: "mi")
@@ -3416,13 +3547,15 @@ struct RunEntryEditorView: View {
             gpsMetricTile(title: "Duration", value: formatDuration(gpsSummaryDurationSeconds), unit: "")
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            RunRouteMapView(route: gpsSummaryRoute)
+            if !gpsSummaryRoute.isEmpty {
+                RunRouteMapView(route: gpsSummaryRoute)
+            }
 
             if !gpsSummarySplits.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Splits")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.72))
                     ForEach(gpsSummarySplits.prefix(8)) { split in
                         HStack {
                             Text("Split \(split.index)")
@@ -3441,22 +3574,50 @@ struct RunEntryEditorView: View {
                     if gpsSummarySplits.count > 8 {
                         Text("+ \(gpsSummarySplits.count - 8) more splits")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.white.opacity(0.65))
                     }
                 }
                 .padding(10)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Notes")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextEditor(text: $notes)
-                    .frame(minHeight: 86)
-                    .padding(4)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    Haptics.selection()
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        gpsSummaryNotesExpanded.toggle()
+                    }
+                } label: {
+                    HStack {
+                        Text("Notes")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.86))
+                        Spacer()
+                        Image(systemName: gpsSummaryNotesExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.76))
+                    }
+                }
+                .buttonStyle(.plain)
+
+                if gpsSummaryNotesExpanded {
+                    TextEditor(text: $notes)
+                        .frame(minHeight: 86)
+                        .padding(4)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                } else if !trimmedRunNotes.isEmpty {
+                    Text(trimmedRunNotes)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(.white.opacity(0.74))
+                } else {
+                    Text("Add notes")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.58))
+                }
             }
+            .padding(10)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Button {
                 saveRun()
@@ -3470,6 +3631,7 @@ struct RunEntryEditorView: View {
             .disabled(saveDisabled)
 
             Button {
+                Haptics.selection()
                 showGPSSummary = false
             } label: {
                 Text("Back to Live Screen")
@@ -3479,11 +3641,161 @@ struct RunEntryEditorView: View {
 
             Text("Last offline save: \(store.lastSavedAt.formatted(date: .omitted, time: .shortened))")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.6))
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(16)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var gpsPermissionBanner: some View {
+        if tracker.authorizationStatus == .denied || tracker.authorizationStatus == .restricted {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Location Access Needed", systemImage: "location.slash.fill")
+                    .font(.subheadline.weight(.semibold))
+                Text("Enable location access in iOS Settings to track GPS distance and pace.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        } else if tracker.authorizationStatus == .notDetermined {
+            Button("Allow Location") {
+                tracker.requestPermission()
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var gpsBottomDock: some View {
+        VStack(spacing: 12) {
+            Capsule()
+                .fill(Color.white.opacity(0.28))
+                .frame(width: 46, height: 5)
+                .padding(.top, 8)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(tracker.isTracking ? "Live GPS Run" : "GPS Ready")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.72))
+                    Text("\(formatDuration(tracker.elapsedSeconds)) · \(gpsLiveDistanceMiles, specifier: "%.2f") mi · \(gpsLivePaceText) /mi")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+
+                Button {
+                    Haptics.selection()
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showLiveRoutePreview.toggle()
+                    }
+                } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: showLiveRoutePreview ? "map.fill" : "map")
+                            .font(.subheadline.weight(.semibold))
+                        Text(showLiveRoutePreview ? "Hide" : "Route")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .foregroundStyle(showLiveRoutePreview ? Color.appAccent : .white.opacity(0.84))
+                    .frame(width: 64, height: 54)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(showLiveRoutePreview ? Color.appAccent.opacity(0.22) : Color.white.opacity(0.14))
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasLiveRoute)
+                .opacity(hasLiveRoute ? 1 : 0.45)
+            }
+
+            Button {
+                handleGPSPrimaryAction()
+            } label: {
+                Label(tracker.isTracking ? "End Run" : "Start Run", systemImage: tracker.isTracking ? "stop.fill" : "play.fill")
+                    .font(.headline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(tracker.isTracking ? Color.red.opacity(0.96) : Color.appAccent)
+                    )
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .disabled(!tracker.canTrack && tracker.authorizationStatus != .notDetermined)
+            .opacity((!tracker.canTrack && tracker.authorizationStatus != .notDetermined) ? 0.45 : 1)
+            .padding(.bottom, 12)
+        }
+        .padding(.horizontal, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.black.opacity(0.78))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+
+    private var hasLiveRoute: Bool {
+        !tracker.route.isEmpty
+    }
+
+    private var canMinimizeLiveGPSRun: Bool {
+        preferredMode == .gps && tracker.isTracking && !showGPSSummary
+    }
+
+    private var gpsMinimizeGesture: some Gesture {
+        DragGesture(minimumDistance: 22)
+            .onEnded { value in
+                guard canMinimizeLiveGPSRun else { return }
+                let verticalTravel = value.translation.height
+                let horizontalTravel = abs(value.translation.width)
+                guard verticalTravel > 100, verticalTravel > horizontalTravel else { return }
+                Haptics.selection()
+                onMinimizeGPS()
+            }
+    }
+
+    private var liveSplitPreview: [String] {
+        let splits = store.computeRunSplits(
+            route: tracker.route,
+            duration: tracker.elapsedSeconds,
+            distanceMiles: gpsLiveDistanceMiles
+        )
+        return Array(splits.prefix(3)).map { formatPacePerMile($0.paceSecPerMile) }
+    }
+
+    private func liveSplitText(at index: Int) -> String {
+        guard liveSplitPreview.indices.contains(index) else {
+            return "--:--"
+        }
+        return liveSplitPreview[index]
+    }
+
+    private var trimmedRunNotes: String {
+        notes.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func handleGPSPrimaryAction() {
+        if tracker.isTracking {
+            endGPSRunAndShowSummary()
+        } else {
+            Haptics.impact(.medium)
+            tracker.startTracking()
+        }
     }
 
     private func gpsMetricTile(title: String, value: String, unit: String) -> some View {
@@ -3510,10 +3822,6 @@ struct RunEntryEditorView: View {
         tracker.distanceMeters * 0.000621371
     }
 
-    private var currentSplitIndex: Int {
-        max(1, Int(floor(gpsLiveDistanceMiles)) + 1)
-    }
-
     private var gpsLivePaceText: String {
         paceText(distanceMiles: gpsLiveDistanceMiles, durationSeconds: tracker.elapsedSeconds)
     }
@@ -3537,6 +3845,7 @@ struct RunEntryEditorView: View {
 
     private func endGPSRunAndShowSummary() {
         if tracker.isTracking {
+            Haptics.warning()
             tracker.stopTracking()
         }
 
@@ -3559,6 +3868,8 @@ struct RunEntryEditorView: View {
             gpsSummarySplits = initialRun.splits
         }
 
+        showLiveRoutePreview = false
+        gpsSummaryNotesExpanded = false
         withAnimation(.easeInOut(duration: 0.2)) {
             showGPSSummary = true
         }
@@ -3675,6 +3986,7 @@ struct RunEntryEditorView: View {
         }
 
         onSave(entry)
+        Haptics.success()
         dismiss()
     }
 
@@ -4201,9 +4513,15 @@ struct HistoryView: View {
 
     @State private var displayMode: DisplayMode = .list
     @State private var selectedDate = Date()
+    @State private var displayedMonth = Calendar.current.startOfMonth(for: Date())
     @State private var deletedSessionsBuffer: [WorkoutSession] = []
     @State private var showUndoDelete = false
     @State private var undoTask: Task<Void, Never>?
+
+    private var workoutDays: Set<Date> {
+        let calendar = Calendar.current
+        return Set(store.state.sessions.map { calendar.startOfDay(for: $0.completedAt) })
+    }
 
     var body: some View {
         List {
@@ -4222,8 +4540,18 @@ struct HistoryView: View {
 
             case .calendar:
                 Section("Choose Date") {
-                    DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
-                        .datePickerStyle(.graphical)
+                    HistoryMonthCalendarView(
+                        displayedMonth: displayedMonth,
+                        selectedDate: selectedDate,
+                        workoutDays: workoutDays,
+                        weekStartsOnMonday: store.state.preferences.weekStartsOnMonday,
+                        onSelectDate: { date in
+                            selectedDate = date
+                            displayedMonth = Calendar.current.startOfMonth(for: date)
+                        },
+                        onPreviousMonth: showPreviousMonth,
+                        onNextMonth: showNextMonth
+                    )
                 }
 
                 sessionsSection(title: "Sessions on \(selectedDate.formatted(date: .abbreviated, time: .omitted))", sessions: store.sessions(on: selectedDate))
@@ -4234,6 +4562,7 @@ struct HistoryView: View {
                 UndoSnackbar(
                     message: "Session deleted",
                     onUndo: {
+                        Haptics.success()
                         store.restoreSessions(deletedSessionsBuffer)
                         clearUndo()
                     },
@@ -4243,6 +4572,15 @@ struct HistoryView: View {
             }
         }
         .navigationTitle("History")
+        .onAppear {
+            displayedMonth = Calendar.current.startOfMonth(for: selectedDate)
+        }
+        .onChange(of: selectedDate) { _, newValue in
+            let targetMonth = Calendar.current.startOfMonth(for: newValue)
+            if !Calendar.current.isDate(targetMonth, equalTo: displayedMonth, toGranularity: .month) {
+                displayedMonth = targetMonth
+            }
+        }
         .onDisappear {
             undoTask?.cancel()
         }
@@ -4266,6 +4604,9 @@ struct HistoryView: View {
                 let idsToDelete = offsets.compactMap { index in
                     sessions.indices.contains(index) ? sessions[index].id : nil
                 }
+                if !idsToDelete.isEmpty {
+                    Haptics.warning()
+                }
                 deletedSessionsBuffer = sessions.filter { idsToDelete.contains($0.id) }
                 store.deleteSessions(ids: idsToDelete)
                 showUndoDelete = !deletedSessionsBuffer.isEmpty
@@ -4285,6 +4626,147 @@ struct HistoryView: View {
         undoTask = nil
         showUndoDelete = false
         deletedSessionsBuffer = []
+    }
+
+    private func showPreviousMonth() {
+        guard let previous = Calendar.current.date(byAdding: .month, value: -1, to: displayedMonth) else { return }
+        displayedMonth = Calendar.current.startOfMonth(for: previous)
+    }
+
+    private func showNextMonth() {
+        guard let next = Calendar.current.date(byAdding: .month, value: 1, to: displayedMonth) else { return }
+        displayedMonth = Calendar.current.startOfMonth(for: next)
+    }
+}
+
+struct HistoryMonthCalendarView: View {
+    let displayedMonth: Date
+    let selectedDate: Date
+    let workoutDays: Set<Date>
+    let weekStartsOnMonday: Bool
+    var onSelectDate: (Date) -> Void
+    var onPreviousMonth: () -> Void
+    var onNextMonth: () -> Void
+
+    private var calendar: Calendar {
+        var updated = Calendar.current
+        if weekStartsOnMonday {
+            updated.firstWeekday = 2
+        }
+        return updated
+    }
+
+    private var monthTitle: String {
+        displayedMonth.formatted(.dateTime.month(.wide).year())
+    }
+
+    private var weekdaySymbols: [String] {
+        let symbols = calendar.shortStandaloneWeekdaySymbols
+        let pivot = max(0, min(symbols.count - 1, calendar.firstWeekday - 1))
+        return Array(symbols[pivot...]) + Array(symbols[..<pivot])
+    }
+
+    private var dayCells: [Date?] {
+        let monthStart = calendar.startOfMonth(for: displayedMonth)
+        guard let daysRange = calendar.range(of: .day, in: .month, for: monthStart) else {
+            return []
+        }
+
+        let firstWeekdayOfMonth = calendar.component(.weekday, from: monthStart)
+        let leadingEmptyDays = (firstWeekdayOfMonth - calendar.firstWeekday + 7) % 7
+
+        var cells = Array<Date?>(repeating: nil, count: leadingEmptyDays)
+        for day in daysRange {
+            if let date = calendar.date(byAdding: .day, value: day - 1, to: monthStart) {
+                cells.append(calendar.startOfDay(for: date))
+            }
+        }
+        while cells.count % 7 != 0 {
+            cells.append(nil)
+        }
+        return cells
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Button(action: onPreviousMonth) {
+                    Image(systemName: "chevron.left")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 30, height: 30)
+                        .background(Color.white.opacity(0.08), in: Circle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Text(monthTitle)
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer()
+
+                Button(action: onNextMonth) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 30, height: 30)
+                        .background(Color.white.opacity(0.08), in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 0) {
+                ForEach(weekdaySymbols, id: \.self) { symbol in
+                    Text(symbol.uppercased())
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(Array(dayCells.enumerated()), id: \.offset) { _, date in
+                    if let date {
+                        dayCell(for: date)
+                    } else {
+                        Color.clear
+                            .frame(height: 36)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func dayCell(for date: Date) -> some View {
+        let normalized = calendar.startOfDay(for: date)
+        let isSelected = calendar.isDate(normalized, inSameDayAs: selectedDate)
+        let hasWorkout = workoutDays.contains(normalized)
+
+        return Button {
+            onSelectDate(normalized)
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(isSelected ? Color.appAccent : Color.clear)
+
+                if hasWorkout {
+                    Circle()
+                        .stroke(
+                            isSelected ? Color.white.opacity(0.88) : Color.appAccent.opacity(0.96),
+                            lineWidth: isSelected ? 1.7 : 1.8
+                        )
+                        .scaleEffect(isSelected ? 1.16 : 1.0)
+                }
+
+                Text("\(calendar.component(.day, from: normalized))")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+            }
+            .frame(width: 36, height: 36)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -4896,6 +5378,38 @@ extension View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
             )
+    }
+}
+
+enum Haptics {
+    static func selection() {
+        let generator = UISelectionFeedbackGenerator()
+        generator.prepare()
+        generator.selectionChanged()
+    }
+
+    static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .medium) {
+        let generator = UIImpactFeedbackGenerator(style: style)
+        generator.prepare()
+        generator.impactOccurred()
+    }
+
+    static func success() {
+        let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
+        generator.notificationOccurred(.success)
+    }
+
+    static func warning() {
+        let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
+        generator.notificationOccurred(.warning)
+    }
+}
+
+private extension Calendar {
+    func startOfMonth(for date: Date) -> Date {
+        self.date(from: dateComponents([.year, .month], from: date)) ?? startOfDay(for: date)
     }
 }
 
