@@ -8,6 +8,80 @@ private extension Color {
     static let appAccent = Color(red: 0.8, green: 48.0 / 255.0, blue: 0.0)
 }
 
+private enum AppTextRole {
+    case hero
+    case title
+    case headline
+    case body
+    case caption
+    case button
+}
+
+private enum AppTypography {
+    private static let regularNames = [
+        "DieGrotesk-Regular",
+        "Die Grotesk Regular",
+        "DieGrotesk",
+        "Die Grotesk"
+    ]
+
+    private static let mediumNames = [
+        "DieGrotesk-Medium",
+        "Die Grotesk Medium",
+        "DieGrotesk-Regular",
+        "Die Grotesk Regular"
+    ]
+
+    private static let semiboldNames = [
+        "DieGrotesk-Semibold",
+        "Die Grotesk Semibold",
+        "DieGrotesk-Bold",
+        "Die Grotesk Bold"
+    ]
+
+    private static let boldNames = [
+        "DieGrotesk-Bold",
+        "Die Grotesk Bold",
+        "DieGrotesk-Semibold",
+        "Die Grotesk Semibold"
+    ]
+
+    static func font(_ role: AppTextRole) -> Font {
+        switch role {
+        case .hero:
+            return resolvedFont(size: 34, textStyle: .largeTitle, names: boldNames, fallbackWeight: .bold)
+        case .title:
+            return resolvedFont(size: 24, textStyle: .title2, names: semiboldNames, fallbackWeight: .semibold)
+        case .headline:
+            return resolvedFont(size: 17, textStyle: .headline, names: semiboldNames, fallbackWeight: .semibold)
+        case .body:
+            return resolvedFont(size: 16, textStyle: .body, names: regularNames, fallbackWeight: .regular)
+        case .caption:
+            return resolvedFont(size: 12, textStyle: .caption1, names: mediumNames, fallbackWeight: .medium)
+        case .button:
+            return resolvedFont(size: 17, textStyle: .headline, names: semiboldNames, fallbackWeight: .semibold)
+        }
+    }
+
+    private static func resolvedFont(
+        size: CGFloat,
+        textStyle: UIFont.TextStyle,
+        names: [String],
+        fallbackWeight: UIFont.Weight
+    ) -> Font {
+        let baseFont = names.lazy.compactMap { UIFont(name: $0, size: size) }.first
+            ?? UIFont.systemFont(ofSize: size, weight: fallbackWeight)
+        let scaled = UIFontMetrics(forTextStyle: textStyle).scaledFont(for: baseFont)
+        return Font(scaled)
+    }
+}
+
+private extension View {
+    func appText(_ role: AppTextRole) -> some View {
+        font(AppTypography.font(role))
+    }
+}
+
 @main
 struct TrainingAppApp: App {
     @StateObject private var store = TrainingStore()
@@ -1931,18 +2005,21 @@ struct AccountSetupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Set up your account")
-                .font(.largeTitle.weight(.bold))
+                .appText(.hero)
 
             Text("Your sessions, templates, stats, and notes are stored offline on-device and tied to this account.")
+                .appText(.body)
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 14) {
                 TextField("Name", text: $name)
+                    .appText(.body)
                     .textInputAutocapitalization(.words)
                     .padding(12)
                     .glassField()
 
                 TextField("Email (optional)", text: $email)
+                    .appText(.body)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.emailAddress)
@@ -1954,7 +2031,7 @@ struct AccountSetupView: View {
                 store.createAccount(displayName: name, email: email)
             } label: {
                 Text("Create Account")
-                    .font(.headline)
+                    .appText(.button)
                     .frame(maxWidth: .infinity)
                     .padding(14)
             }
@@ -1962,7 +2039,7 @@ struct AccountSetupView: View {
             .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Text("Default appearance is dark mode. You can switch to light or system in Settings.")
-                .font(.footnote)
+                .appText(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(22)
@@ -2074,13 +2151,14 @@ struct WorkoutView: View {
     private var welcomeCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Welcome back")
-                .font(.headline)
+                .appText(.headline)
                 .foregroundStyle(.secondary)
 
             Text(store.state.account?.displayName ?? "Athlete")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .appText(.hero)
 
             Text("Start a new lifting session, launch a run, or continue your current workout.")
+                .appText(.body)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2090,13 +2168,13 @@ struct WorkoutView: View {
     private var activeSessionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Active Session")
-                .font(.headline)
+                .appText(.headline)
 
             if let active = store.state.activeSession {
                 Text(active.name)
-                    .font(.title3.weight(.semibold))
+                    .appText(.title)
                 Text("Started \(active.startedAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.footnote)
+                    .appText(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -2119,13 +2197,14 @@ struct WorkoutView: View {
     private var startCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Start")
-                .font(.headline)
+                .appText(.headline)
 
             Button {
                 store.startFreshSession(named: "New Session")
                 openActiveSession = true
             } label: {
                 Label("Start Session", systemImage: "plus.circle.fill")
+                    .appText(.button)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -2137,7 +2216,7 @@ struct WorkoutView: View {
     private var templatesCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Quick Templates")
-                .font(.headline)
+                .appText(.headline)
 
             let columns = [
                 GridItem(.flexible(), spacing: 10),
@@ -2151,17 +2230,17 @@ struct WorkoutView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(template.name)
-                                .font(.subheadline.weight(.semibold))
+                                .appText(.headline)
                                 .lineLimit(2)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Text("\(template.exercises.count) exercises")
-                                .font(.caption)
+                                .appText(.caption)
                                 .foregroundStyle(.secondary)
                             Spacer()
                             HStack {
                                 Spacer()
                                 Label("Start", systemImage: "play.fill")
-                                    .font(.caption.weight(.semibold))
+                                    .appText(.caption)
                             }
                         }
                         .padding(12)
@@ -2193,10 +2272,11 @@ struct StatTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption)
+                .appText(.caption)
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.headline.monospacedDigit())
+                .appText(.headline)
+                .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
@@ -2359,16 +2439,27 @@ struct ActiveSessionView: View {
                         }
 
                         Button {
+                            Haptics.selection()
                             showExercisePicker = true
                         } label: {
                             Text("+ Add Exercise")
                                 .font(.headline.weight(.semibold))
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .padding(.vertical, 10)
-                                .foregroundStyle(Color.appAccent)
+                                .foregroundStyle(.white)
                                 .background(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(Color.appAccent.opacity(0.9), lineWidth: 1.2)
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [Color.appAccent.opacity(0.95), Color.appAccent.opacity(0.72)],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                        )
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
                                 )
                         }
                         .buttonStyle(.plain)
@@ -2730,28 +2821,33 @@ struct ExerciseCardView: View {
     @State private var notesExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text(exercise.name)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(Color.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(exercise.name)
+                        .appText(.headline)
+                        .foregroundStyle(.white)
+
+                    Text("\(completedSetCount)/\(exercise.sets.count) sets complete")
+                        .appText(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Spacer()
 
-                Image(systemName: "chart.line.uptrend.xyaxis")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 28, height: 24)
-                    .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                Image(systemName: "ellipsis")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 28, height: 24)
-                    .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Label("\(exercise.sets.count)", systemImage: "list.number")
+                    .appText(.caption)
+                    .foregroundStyle(Color.appAccent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(Color.appAccent.opacity(0.18))
+                    )
             }
 
             Button {
+                Haptics.selection()
                 withAnimation(.easeInOut(duration: 0.2)) {
                     notesExpanded.toggle()
                 }
@@ -2762,8 +2858,18 @@ struct ExerciseCardView: View {
                     Spacer()
                     Image(systemName: notesExpanded ? "chevron.up" : "chevron.down")
                 }
-                .font(.caption2)
+                .appText(.caption)
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
             }
             .buttonStyle(.plain)
 
@@ -2783,17 +2889,29 @@ struct ExerciseCardView: View {
             }
 
             Button {
+                Haptics.impact(.light)
                 onAddSet()
             } label: {
                 Text("+ Add Set")
-                    .font(.subheadline.weight(.semibold))
+                    .appText(.button)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.appAccent.opacity(0.95), Color.appAccent.opacity(0.72)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
                     )
             }
+            .foregroundStyle(.white)
             .buttonStyle(.plain)
 
             if notesExpanded {
@@ -2803,11 +2921,33 @@ struct ExerciseCardView: View {
                         set: { onUpdateNotes($0) }
                     )
                 )
-                .font(.caption)
+                .appText(.caption)
                 .frame(minHeight: 36)
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                )
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .overlay(alignment: .topLeading) {
+            Capsule()
+                .fill(Color.appAccent.opacity(0.75))
+                .frame(width: 84, height: 4)
+                .padding(.top, 10)
+                .padding(.leading, 12)
+        }
+        .shadow(color: Color.black.opacity(0.22), radius: 10, x: 0, y: 6)
     }
 
     private var exerciseGridHeader: some View {
@@ -2824,12 +2964,16 @@ struct ExerciseCardView: View {
                 .frame(width: 28)
         }
         .font(.caption.weight(.semibold))
-        .foregroundStyle(.white.opacity(0.92))
+        .foregroundStyle(.white.opacity(0.75))
     }
 
     private func previousSet(at index: Int) -> LoggedSet? {
         guard previousSets.indices.contains(index) else { return nil }
         return previousSets[index]
+    }
+
+    private var completedSetCount: Int {
+        exercise.sets.filter(\.isCompleted).count
     }
 }
 
@@ -2920,6 +3064,7 @@ struct SetRowView: View {
             Menu {
                 ForEach(SetStyle.allCases) { style in
                     Button {
+                        Haptics.selection()
                         onStyleChange(style)
                     } label: {
                         Label(style.rawValue, systemImage: style.symbol)
@@ -2931,18 +3076,24 @@ struct SetRowView: View {
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 32)
                     .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [set.style.tint.opacity(0.32), set.style.tint.opacity(0.18)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(set.style.tint.opacity(0.7), lineWidth: 1.2)
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .stroke(set.style.tint.opacity(0.88), lineWidth: 1.1)
                     )
             }
 
             Text(previousText)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.3))
+                .foregroundStyle(.white.opacity(0.5))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             TextField("0", text: weightTextBinding)
@@ -2954,6 +3105,10 @@ struct SetRowView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.white.opacity(0.08))
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
 
             TextField("0", text: repsTextBinding)
             .font(.subheadline.weight(.semibold).monospacedDigit())
@@ -2964,8 +3119,15 @@ struct SetRowView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.white.opacity(0.08))
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
 
-            Button(action: onToggleComplete) {
+            Button {
+                Haptics.selection()
+                onToggleComplete()
+            } label: {
                 Image(systemName: "checkmark")
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(set.isCompleted ? .white : .white.opacity(0.45))
@@ -2977,6 +3139,16 @@ struct SetRowView: View {
             }
             .buttonStyle(.plain)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.045))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.09), lineWidth: 1)
+        )
     }
 
     private var deleteActionBackground: some View {
@@ -3131,6 +3303,7 @@ struct ExercisePickerView: View {
 
                 Section {
                     Button {
+                        Haptics.selection()
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showCustomCreator.toggle()
                         }
@@ -3171,6 +3344,7 @@ struct ExercisePickerView: View {
                         }
 
                         Button {
+                            Haptics.impact(.light)
                             createCustomExercise()
                         } label: {
                             Text("Create and Add Now")
@@ -3190,8 +3364,10 @@ struct ExercisePickerView: View {
                     ForEach(filtered) { exercise in
                         Button {
                             if allowsMultiSelect {
+                                Haptics.selection()
                                 toggleSelection(for: exercise.id)
                             } else {
+                                Haptics.selection()
                                 onSelect(exercise)
                                 dismiss()
                             }
@@ -3216,6 +3392,7 @@ struct ExercisePickerView: View {
                 if allowsMultiSelect {
                     Section {
                         Button {
+                            Haptics.impact(.light)
                             addSelectedExercises()
                         } label: {
                             Text("Add Selected (\(selectedExerciseIDs.count))")
