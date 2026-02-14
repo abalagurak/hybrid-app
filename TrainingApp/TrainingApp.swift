@@ -425,10 +425,61 @@ enum DistanceSource: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+// MARK: - Running Data Model Updates (RUN-MODEL-M1)
+// Changes:
+// - RUN-MODEL-M1: Extended coordinate samples with optional altitude/accuracy decoding fallback.
+// - RUN-MODEL-M2: Added persisted run analytics fields (`paceSeries`, `bestSegments`) to `RunEntry`.
+// - RUN-MODEL-M3: Added persisted weekly goal settings (`RunningGoals`) to app state.
 struct CoordinatePoint: Codable, Hashable {
     var latitude: Double
     var longitude: Double
     var timestamp: Date
+    var altitudeMeters: Double?
+    var horizontalAccuracy: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case latitude
+        case longitude
+        case timestamp
+        case altitudeMeters
+        case horizontalAccuracy
+        case altitude
+        case accuracy
+    }
+
+    init(
+        latitude: Double,
+        longitude: Double,
+        timestamp: Date,
+        altitudeMeters: Double? = nil,
+        horizontalAccuracy: Double? = nil
+    ) {
+        self.latitude = latitude
+        self.longitude = longitude
+        self.timestamp = timestamp
+        self.altitudeMeters = altitudeMeters
+        self.horizontalAccuracy = horizontalAccuracy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        latitude = try container.decodeIfPresent(Double.self, forKey: .latitude) ?? 0
+        longitude = try container.decodeIfPresent(Double.self, forKey: .longitude) ?? 0
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
+        altitudeMeters = try container.decodeIfPresent(Double.self, forKey: .altitudeMeters)
+            ?? container.decodeIfPresent(Double.self, forKey: .altitude)
+        horizontalAccuracy = try container.decodeIfPresent(Double.self, forKey: .horizontalAccuracy)
+            ?? container.decodeIfPresent(Double.self, forKey: .accuracy)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(latitude, forKey: .latitude)
+        try container.encode(longitude, forKey: .longitude)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(altitudeMeters, forKey: .altitudeMeters)
+        try container.encodeIfPresent(horizontalAccuracy, forKey: .horizontalAccuracy)
+    }
 }
 
 struct RunSplit: Codable, Hashable, Identifiable {
@@ -437,6 +488,30 @@ struct RunSplit: Codable, Hashable, Identifiable {
     var distanceMiles: Double
     var durationSeconds: Int
     var paceSecPerMile: Int
+}
+
+struct RunPacePoint: Codable, Hashable, Identifiable {
+    var mile: Double
+    var paceSecPerMile: Double
+
+    var id: Double { mile }
+
+    init(mile: Double, paceSecPerMile: Double) {
+        self.mile = mile
+        self.paceSecPerMile = paceSecPerMile
+    }
+}
+
+struct RunBestSegments: Codable, Hashable {
+    var halfMileBestSeconds: Double?
+    var mileBestSeconds: Double?
+    var twoMileBestSeconds: Double?
+    var halfMileStartMile: Double?
+    var halfMileEndMile: Double?
+    var mileStartMile: Double?
+    var mileEndMile: Double?
+    var twoMileStartMile: Double?
+    var twoMileEndMile: Double?
 }
 
 struct RunEntry: Codable, Hashable {
@@ -449,6 +524,8 @@ struct RunEntry: Codable, Hashable {
     var avgPaceSecPerMile: Int?
     var elevationGainFeet: Double?
     var distanceSource: DistanceSource
+    var paceSeries: [RunPacePoint]
+    var bestSegments: RunBestSegments?
 
     enum CodingKeys: String, CodingKey {
         case mode
@@ -461,6 +538,8 @@ struct RunEntry: Codable, Hashable {
         case avgPaceSecPerMile
         case elevationGainFeet
         case distanceSource
+        case paceSeries
+        case bestSegments
     }
 
     init(
@@ -472,7 +551,9 @@ struct RunEntry: Codable, Hashable {
         splits: [RunSplit] = [],
         avgPaceSecPerMile: Int? = nil,
         elevationGainFeet: Double? = nil,
-        distanceSource: DistanceSource? = nil
+        distanceSource: DistanceSource? = nil,
+        paceSeries: [RunPacePoint] = [],
+        bestSegments: RunBestSegments? = nil
     ) {
         self.mode = mode
         self.distanceMiles = distanceMiles
@@ -483,6 +564,8 @@ struct RunEntry: Codable, Hashable {
         self.avgPaceSecPerMile = avgPaceSecPerMile
         self.elevationGainFeet = elevationGainFeet
         self.distanceSource = distanceSource ?? (mode == .gps ? .gps : .manual)
+        self.paceSeries = paceSeries
+        self.bestSegments = bestSegments
     }
 
     init(from decoder: Decoder) throws {
@@ -506,6 +589,8 @@ struct RunEntry: Codable, Hashable {
         elevationGainFeet = try container.decodeIfPresent(Double.self, forKey: .elevationGainFeet)
         distanceSource = try container.decodeIfPresent(DistanceSource.self, forKey: .distanceSource)
             ?? (mode == .gps ? .gps : .manual)
+        paceSeries = try container.decodeIfPresent([RunPacePoint].self, forKey: .paceSeries) ?? []
+        bestSegments = try container.decodeIfPresent(RunBestSegments.self, forKey: .bestSegments)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -519,6 +604,8 @@ struct RunEntry: Codable, Hashable {
         try container.encodeIfPresent(avgPaceSecPerMile, forKey: .avgPaceSecPerMile)
         try container.encodeIfPresent(elevationGainFeet, forKey: .elevationGainFeet)
         try container.encode(distanceSource, forKey: .distanceSource)
+        try container.encode(paceSeries, forKey: .paceSeries)
+        try container.encodeIfPresent(bestSegments, forKey: .bestSegments)
     }
 }
 
@@ -715,6 +802,29 @@ struct SetMemory: Codable {
     var style: SetStyle
 }
 
+struct RunningGoals: Codable, Hashable {
+    var weeklyMilesGoal: Double
+    var goalEnabled: Bool
+
+    static let disabled = RunningGoals(weeklyMilesGoal: 0, goalEnabled: false)
+
+    enum CodingKeys: String, CodingKey {
+        case weeklyMilesGoal
+        case goalEnabled
+    }
+
+    init(weeklyMilesGoal: Double = 0, goalEnabled: Bool = false) {
+        self.weeklyMilesGoal = max(0, weeklyMilesGoal)
+        self.goalEnabled = goalEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        weeklyMilesGoal = max(0, try container.decodeIfPresent(Double.self, forKey: .weeklyMilesGoal) ?? 0)
+        goalEnabled = try container.decodeIfPresent(Bool.self, forKey: .goalEnabled) ?? false
+    }
+}
+
 struct StoredAppState: Codable {
     var account: UserAccount?
     var theme: AppTheme
@@ -726,6 +836,7 @@ struct StoredAppState: Codable {
     var activeSession: WorkoutSessionDraft?
     var preferences: UserPreferences
     var bodyWeightEntries: [BodyWeightEntry]
+    var runningGoals: RunningGoals
 
     enum CodingKeys: String, CodingKey {
         case account
@@ -738,6 +849,7 @@ struct StoredAppState: Codable {
         case activeSession
         case preferences
         case bodyWeightEntries
+        case runningGoals
     }
 
     init(
@@ -750,7 +862,8 @@ struct StoredAppState: Codable {
         lastSetMemory: [String: SetMemory],
         activeSession: WorkoutSessionDraft?,
         preferences: UserPreferences = .default,
-        bodyWeightEntries: [BodyWeightEntry] = []
+        bodyWeightEntries: [BodyWeightEntry] = [],
+        runningGoals: RunningGoals = .disabled
     ) {
         self.account = account
         self.theme = theme
@@ -762,6 +875,7 @@ struct StoredAppState: Codable {
         self.activeSession = activeSession
         self.preferences = preferences
         self.bodyWeightEntries = bodyWeightEntries.sorted { $0.recordedAt < $1.recordedAt }
+        self.runningGoals = runningGoals
     }
 
     init(from decoder: Decoder) throws {
@@ -777,6 +891,7 @@ struct StoredAppState: Codable {
         preferences = try container.decodeIfPresent(UserPreferences.self, forKey: .preferences) ?? .default
         bodyWeightEntries = (try container.decodeIfPresent([BodyWeightEntry].self, forKey: .bodyWeightEntries) ?? [])
             .sorted { $0.recordedAt < $1.recordedAt }
+        runningGoals = try container.decodeIfPresent(RunningGoals.self, forKey: .runningGoals) ?? .disabled
     }
 
     static let initial = StoredAppState(
@@ -789,7 +904,8 @@ struct StoredAppState: Codable {
         lastSetMemory: [:],
         activeSession: nil,
         preferences: .default,
-        bodyWeightEntries: []
+        bodyWeightEntries: [],
+        runningGoals: .disabled
     )
 }
 
@@ -804,6 +920,316 @@ struct BodyWeightProgressPoint: Identifiable {
     let id = UUID()
     let date: Date
     let weightKg: Double
+}
+
+// MARK: - Running Analytics (RUN-ANALYTICS-A1)
+// Changes:
+// - RUN-ANALYTICS-A1: Added GPS pace-series computation with filtering, smoothing, and downsampling.
+// - RUN-ANALYTICS-A2: Added best contiguous segment scan (0.5/1.0/2.0 mi) using two pointers + interpolation.
+// - RUN-ANALYTICS-A3: Added helper snapshot used by run finalization, lazy cache backfill, and UI.
+private struct RunAnalyticsSnapshot {
+    var paceSeries: [RunPacePoint]
+    var bestSegments: RunBestSegments?
+    var movingDistanceMiles: Double
+    var movingDurationSeconds: Double
+
+    var movingAvgPaceSecPerMile: Double? {
+        guard movingDistanceMiles > 0, movingDurationSeconds > 0 else { return nil }
+        return movingDurationSeconds / movingDistanceMiles
+    }
+}
+
+private struct RunDistanceTimePoint {
+    var distanceMiles: Double
+    var elapsedSeconds: Double
+}
+
+private struct RunBestSegmentCandidate {
+    var durationSeconds: Double
+    var startMile: Double
+    var endMile: Double
+}
+
+private enum RunAnalytics {
+    private static let metersPerMile = 1609.344
+    private static let maxAccuracyMeters = 50.0
+    private static let minMovingSpeedMetersPerSecond = 0.8
+    private static let minMovingDistanceMeters = 2.0
+    private static let minPaceIntervalMiles = 0.005
+    private static let minPaceSecPerMile = 240.0
+    private static let maxPaceSecPerMile = 1800.0
+    private static let smoothingWindow = 5
+    private static let maxPaceSeriesPoints = 300
+
+    static func snapshot(for run: RunEntry) -> RunAnalyticsSnapshot {
+        guard run.mode == .gps, let route = run.route, route.count >= 2 else {
+            return RunAnalyticsSnapshot(
+                paceSeries: run.paceSeries,
+                bestSegments: run.bestSegments,
+                movingDistanceMiles: 0,
+                movingDurationSeconds: 0
+            )
+        }
+
+        let sorted = route.sorted { $0.timestamp < $1.timestamp }
+        var acceptedPoints: [RunDistanceTimePoint] = [.init(distanceMiles: 0, elapsedSeconds: 0)]
+        var paceSeriesRaw: [RunPacePoint] = []
+        var cumulativeMiles = 0.0
+        var movingSeconds = 0.0
+
+        for index in 1..<sorted.count {
+            let previous = sorted[index - 1]
+            let current = sorted[index]
+            let deltaSeconds = current.timestamp.timeIntervalSince(previous.timestamp)
+            if deltaSeconds <= 0 {
+                continue
+            }
+            if isBadAccuracy(previous.horizontalAccuracy) || isBadAccuracy(current.horizontalAccuracy) {
+                continue
+            }
+
+            let deltaMeters = CLLocation(
+                latitude: previous.latitude,
+                longitude: previous.longitude
+            ).distance(from: CLLocation(latitude: current.latitude, longitude: current.longitude))
+            if deltaMeters <= 0 {
+                continue
+            }
+
+            let speed = deltaMeters / deltaSeconds
+            let isMoving = speed >= minMovingSpeedMetersPerSecond || deltaMeters >= minMovingDistanceMeters
+            if !isMoving {
+                continue
+            }
+
+            let deltaMiles = deltaMeters / metersPerMile
+            if deltaMiles <= 0 {
+                continue
+            }
+
+            cumulativeMiles += deltaMiles
+            movingSeconds += deltaSeconds
+            acceptedPoints.append(
+                RunDistanceTimePoint(
+                    distanceMiles: cumulativeMiles,
+                    elapsedSeconds: movingSeconds
+                )
+            )
+
+            if deltaMiles < minPaceIntervalMiles {
+                continue
+            }
+
+            let instantPace = (deltaSeconds / deltaMiles).clamped(
+                min: minPaceSecPerMile,
+                max: maxPaceSecPerMile
+            )
+            paceSeriesRaw.append(
+                RunPacePoint(
+                    mile: cumulativeMiles,
+                    paceSecPerMile: instantPace
+                )
+            )
+        }
+
+        let smoothed = smoothPace(points: paceSeriesRaw, window: smoothingWindow)
+        let downsampled = downsamplePace(points: smoothed, maxCount: maxPaceSeriesPoints)
+        let bestSegments = buildBestSegments(from: acceptedPoints)
+
+        return RunAnalyticsSnapshot(
+            paceSeries: downsampled,
+            bestSegments: bestSegments,
+            movingDistanceMiles: cumulativeMiles,
+            movingDurationSeconds: movingSeconds
+        )
+    }
+
+    static func shouldBackfill(run: RunEntry, snapshot: RunAnalyticsSnapshot) -> Bool {
+        guard run.mode == .gps, let route = run.route, route.count >= 2 else { return false }
+
+        let missingPaceSeries = run.paceSeries.isEmpty && !snapshot.paceSeries.isEmpty
+        let missingBestSegments = run.bestSegments == nil && snapshot.bestSegments != nil
+        return missingPaceSeries || missingBestSegments
+    }
+
+    private static func isBadAccuracy(_ accuracy: Double?) -> Bool {
+        guard let accuracy else { return false }
+        if accuracy < 0 {
+            return true
+        }
+        return accuracy > maxAccuracyMeters
+    }
+
+    private static func smoothPace(points: [RunPacePoint], window: Int) -> [RunPacePoint] {
+        guard !points.isEmpty else { return [] }
+        guard window > 1 else { return points }
+
+        var buffer: [Double] = []
+        buffer.reserveCapacity(window)
+        var runningSum = 0.0
+        var smoothed: [RunPacePoint] = []
+        smoothed.reserveCapacity(points.count)
+
+        for point in points {
+            buffer.append(point.paceSecPerMile)
+            runningSum += point.paceSecPerMile
+            if buffer.count > window {
+                runningSum -= buffer.removeFirst()
+            }
+            let averagedPace = runningSum / Double(buffer.count)
+            smoothed.append(
+                RunPacePoint(
+                    mile: point.mile,
+                    paceSecPerMile: averagedPace
+                )
+            )
+        }
+
+        return smoothed
+    }
+
+    private static func downsamplePace(points: [RunPacePoint], maxCount: Int) -> [RunPacePoint] {
+        guard points.count > maxCount, maxCount > 2 else { return points }
+        let totalDistance = points.last?.mile ?? 0
+        guard totalDistance > 0 else { return Array(points.prefix(maxCount)) }
+
+        var sampled: [RunPacePoint] = []
+        sampled.reserveCapacity(maxCount)
+
+        var lowerIndex = 0
+        for sampleIndex in 0..<maxCount {
+            let ratio = Double(sampleIndex) / Double(maxCount - 1)
+            let targetMile = ratio * totalDistance
+
+            while lowerIndex + 1 < points.count, points[lowerIndex + 1].mile < targetMile {
+                lowerIndex += 1
+            }
+
+            if lowerIndex + 1 >= points.count {
+                if let last = points.last {
+                    sampled.append(
+                        RunPacePoint(
+                            mile: targetMile,
+                            paceSecPerMile: last.paceSecPerMile
+                        )
+                    )
+                }
+                continue
+            }
+
+            let lower = points[lowerIndex]
+            let upper = points[lowerIndex + 1]
+            let interpolated = interpolatePace(targetMile: targetMile, lower: lower, upper: upper)
+            sampled.append(
+                RunPacePoint(
+                    mile: targetMile,
+                    paceSecPerMile: interpolated
+                )
+            )
+        }
+
+        return sampled
+    }
+
+    private static func interpolatePace(targetMile: Double, lower: RunPacePoint, upper: RunPacePoint) -> Double {
+        let deltaMiles = upper.mile - lower.mile
+        if deltaMiles <= 0 {
+            return upper.paceSecPerMile
+        }
+        let ratio = ((targetMile - lower.mile) / deltaMiles).clamped(min: 0, max: 1)
+        return lower.paceSecPerMile + ((upper.paceSecPerMile - lower.paceSecPerMile) * ratio)
+    }
+
+    private static func buildBestSegments(from points: [RunDistanceTimePoint]) -> RunBestSegments? {
+        guard points.count >= 2 else { return nil }
+
+        let half = bestSegment(lengthMiles: 0.5, samples: points)
+        let mile = bestSegment(lengthMiles: 1.0, samples: points)
+        let twoMile = bestSegment(lengthMiles: 2.0, samples: points)
+
+        if half == nil, mile == nil, twoMile == nil {
+            return nil
+        }
+
+        return RunBestSegments(
+            halfMileBestSeconds: half?.durationSeconds,
+            mileBestSeconds: mile?.durationSeconds,
+            twoMileBestSeconds: twoMile?.durationSeconds,
+            halfMileStartMile: half?.startMile,
+            halfMileEndMile: half?.endMile,
+            mileStartMile: mile?.startMile,
+            mileEndMile: mile?.endMile,
+            twoMileStartMile: twoMile?.startMile,
+            twoMileEndMile: twoMile?.endMile
+        )
+    }
+
+    private static func bestSegment(
+        lengthMiles: Double,
+        samples: [RunDistanceTimePoint]
+    ) -> RunBestSegmentCandidate? {
+        guard lengthMiles > 0, samples.count >= 2 else { return nil }
+
+        var best: RunBestSegmentCandidate?
+        var endIndex = 1
+
+        for startIndex in 0..<(samples.count - 1) {
+            endIndex = max(endIndex, startIndex + 1)
+            let start = samples[startIndex]
+            let targetDistance = start.distanceMiles + lengthMiles
+
+            while endIndex < samples.count, samples[endIndex].distanceMiles < targetDistance {
+                endIndex += 1
+            }
+
+            if endIndex >= samples.count {
+                break
+            }
+
+            let lower = samples[max(startIndex, endIndex - 1)]
+            let upper = samples[endIndex]
+            let endTime = interpolateTime(
+                targetDistance: targetDistance,
+                lower: lower,
+                upper: upper
+            )
+            let duration = endTime - start.elapsedSeconds
+            if duration <= 0 {
+                continue
+            }
+
+            if let current = best {
+                if duration < current.durationSeconds {
+                    best = RunBestSegmentCandidate(
+                        durationSeconds: duration,
+                        startMile: start.distanceMiles,
+                        endMile: targetDistance
+                    )
+                }
+            } else {
+                best = RunBestSegmentCandidate(
+                    durationSeconds: duration,
+                    startMile: start.distanceMiles,
+                    endMile: targetDistance
+                )
+            }
+        }
+
+        return best
+    }
+
+    private static func interpolateTime(
+        targetDistance: Double,
+        lower: RunDistanceTimePoint,
+        upper: RunDistanceTimePoint
+    ) -> Double {
+        let deltaDistance = upper.distanceMiles - lower.distanceMiles
+        if deltaDistance <= 0 {
+            return upper.elapsedSeconds
+        }
+        let ratio = ((targetDistance - lower.distanceMiles) / deltaDistance).clamped(min: 0, max: 1)
+        return lower.elapsedSeconds + ((upper.elapsedSeconds - lower.elapsedSeconds) * ratio)
+    }
 }
 
 // MARK: - Persistence
@@ -949,6 +1375,13 @@ final class TrainingStore: ObservableObject {
 
     func updatePreferences(_ preferences: UserPreferences) {
         state.preferences = preferences
+    }
+
+    func updateRunningGoals(_ goals: RunningGoals) {
+        state.runningGoals = RunningGoals(
+            weeklyMilesGoal: goals.weeklyMilesGoal,
+            goalEnabled: goals.goalEnabled && goals.weeklyMilesGoal > 0
+        )
     }
 
     func signOutAndResetData() {
@@ -1524,6 +1957,16 @@ final class TrainingStore: ObservableObject {
         state.sessions.first(where: { $0.id == id })
     }
 
+    func ensureRunAnalyticsCached(for sessionID: UUID) {
+        guard let index = state.sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        guard var run = state.sessions[index].run else { return }
+        let snapshot = RunAnalytics.snapshot(for: run)
+        guard RunAnalytics.shouldBackfill(run: run, snapshot: snapshot) else { return }
+        run.paceSeries = snapshot.paceSeries
+        run.bestSegments = snapshot.bestSegments
+        state.sessions[index].run = run
+    }
+
     func previousSets(for exerciseName: String) -> [LoggedSet] {
         for session in sessionsNewestFirst {
             if let matched = session.exercises.first(where: {
@@ -1686,6 +2129,15 @@ final class TrainingStore: ObservableObject {
         }
 
         if finalized.mode == .gps {
+            let snapshot = RunAnalytics.snapshot(for: finalized)
+            finalized.paceSeries = snapshot.paceSeries
+            finalized.bestSegments = snapshot.bestSegments
+        } else {
+            finalized.paceSeries = []
+            finalized.bestSegments = nil
+        }
+
+        if finalized.mode == .gps {
             finalized.distanceSource = (finalized.route?.isEmpty == false) ? .gps : .estimated
         } else {
             finalized.distanceSource = .manual
@@ -1695,6 +2147,9 @@ final class TrainingStore: ObservableObject {
     }
 
     private func fastestMilePace(from run: RunEntry) -> Int? {
+        if let segmentMile = run.bestSegments?.mileBestSeconds {
+            return Int(segmentMile.rounded())
+        }
         let fullMileSplits = run.splits.filter { $0.distanceMiles >= 0.99 }
         if let minSplitPace = fullMileSplits.map(\.paceSecPerMile).min() {
             return minSplitPace
@@ -1838,7 +2293,9 @@ final class GPSRunTracker: NSObject, ObservableObject, CLLocationManagerDelegate
             let point = CoordinatePoint(
                 latitude: location.coordinate.latitude,
                 longitude: location.coordinate.longitude,
-                timestamp: location.timestamp
+                timestamp: location.timestamp,
+                altitudeMeters: location.altitude,
+                horizontalAccuracy: location.horizontalAccuracy
             )
             DispatchQueue.main.async {
                 self.route.append(point)
@@ -2262,6 +2719,771 @@ struct WorkoutView: View {
             StatTile(title: "Run", value: "\(String(format: "%.1f", store.totalRunDistanceMiles)) mi")
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Insights (RUN-INSIGHTS-I1)
+// Changes:
+// - RUN-INSIGHTS-I1: Added top segmented selector for Running vs Lifting insights.
+// - RUN-INSIGHTS-I2: Preserved and restored lifting-oriented insight cards (week/trends/consistency).
+// - RUN-INSIGHTS-I3: Added running streaks + heatmap + weekly goal management.
+private struct RunningStreakMetrics {
+    var currentStreakDays: Int
+    var longestStreakDays: Int
+    var runsLast7Days: Int
+    var runsLast30Days: Int
+    var milesLast7Days: Double
+    var milesLast30Days: Double
+}
+
+struct InsightsView: View {
+    @EnvironmentObject private var store: TrainingStore
+
+    private enum InsightSection: String, CaseIterable, Identifiable {
+        case running = "Running"
+        case lifting = "Lifting"
+
+        var id: String { rawValue }
+    }
+
+    private static let loadFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    @State private var selectedSection: InsightSection = .running
+    @State private var showGoalEditor = false
+    @State private var selectedHeatmapDay: Date?
+    @State private var showHeatmapDaySheet = false
+
+    private let runDayThresholdMiles = 0.1
+    private var calendar: Calendar { Calendar.current }
+
+    private var runningSessions: [WorkoutSession] {
+        store.state.sessions
+            .filter { ($0.run?.distanceMiles ?? 0) > 0 }
+            .sorted { $0.completedAt < $1.completedAt }
+    }
+
+    private var liftingSessions: [WorkoutSession] {
+        store.state.sessions
+            .filter { $0.liftingLoad > 0 }
+            .sorted { $0.completedAt < $1.completedAt }
+    }
+
+    private var hasLiftingData: Bool {
+        !liftingSessions.isEmpty
+    }
+
+    private var loadCalculator: TrainingLoadCalculator {
+        TrainingLoadCalculator(
+            sessions: store.state.sessions,
+            calendar: .current,
+            weekStartsOnMonday: store.state.preferences.weekStartsOnMonday
+        )
+    }
+
+    private var thisWeekLoad: WeeklyTrainingLoad {
+        loadCalculator.weeklyLoad(for: Date())
+    }
+
+    private var lastWeekLoad: WeeklyTrainingLoad {
+        let previousWeekReferenceDate = Calendar.current.date(
+            byAdding: .day,
+            value: -7,
+            to: thisWeekLoad.weekStart
+        ) ?? Date()
+        return loadCalculator.weeklyLoad(for: previousWeekReferenceDate)
+    }
+
+    private var liftingWeekDeltaPercent: Double? {
+        loadCalculator.weekOverWeekDeltaPercent(
+            thisWeek: thisWeekLoad.liftingLoad,
+            lastWeek: lastWeekLoad.liftingLoad
+        )
+    }
+
+    private var thisWeekLiftingSessions: [WorkoutSession] {
+        loadCalculator
+            .sessions(inWeekContaining: Date())
+            .filter { $0.liftingLoad > 0 }
+    }
+
+    private var thisWeekCompletedSets: Int {
+        thisWeekLiftingSessions.reduce(0) { partial, session in
+            partial + session.exercises.reduce(0) { exerciseTotal, exercise in
+                exerciseTotal + exercise.sets.filter(\.isCompleted).count
+            }
+        }
+    }
+
+    private var liftingSessionsLast7Days: [WorkoutSession] {
+        let today = calendar.startOfDay(for: Date())
+        let last7Start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        return liftingSessions.filter { session in
+            let day = calendar.startOfDay(for: session.completedAt)
+            return day >= last7Start && day <= today
+        }
+    }
+
+    private var liftingSessionsLast30Days: [WorkoutSession] {
+        let today = calendar.startOfDay(for: Date())
+        let last30Start = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+        return liftingSessions.filter { session in
+            let day = calendar.startOfDay(for: session.completedAt)
+            return day >= last30Start && day <= today
+        }
+    }
+
+    private var liftingLoadLast30Days: Double {
+        liftingSessionsLast30Days.reduce(0) { $0 + $1.liftingLoad }
+    }
+
+    private var averageLiftingLoadPerSession30Days: Double? {
+        guard !liftingSessionsLast30Days.isEmpty else { return nil }
+        return liftingLoadLast30Days / Double(liftingSessionsLast30Days.count)
+    }
+
+    private var bestLiftingDayLast30Days: (date: Date, load: Double)? {
+        var dayLoads: [Date: Double] = [:]
+        for session in liftingSessionsLast30Days {
+            let day = calendar.startOfDay(for: session.completedAt)
+            dayLoads[day, default: 0] += session.liftingLoad
+        }
+        guard let best = dayLoads.max(by: { $0.value < $1.value }) else { return nil }
+        return (best.key, best.value)
+    }
+
+    private var mostCommonLiftingDay: String {
+        guard !liftingSessions.isEmpty else { return "—" }
+        var counts: [Int: Int] = [:]
+        for session in liftingSessions {
+            let weekday = calendar.component(.weekday, from: session.completedAt)
+            counts[weekday, default: 0] += 1
+        }
+        guard let top = counts.max(by: { $0.value < $1.value })?.key else { return "—" }
+        let symbols = calendar.weekdaySymbols
+        let index = max(0, min(symbols.count - 1, top - 1))
+        return symbols[index]
+    }
+
+    private var liftingSessionsThisMonthCount: Int {
+        let now = Date()
+        return liftingSessions.filter { session in
+            calendar.isDate(session.completedAt, equalTo: now, toGranularity: .month)
+        }.count
+    }
+
+    private var runningSessionsByDay: [Date: [WorkoutSession]] {
+        Dictionary(grouping: runningSessions) { session in
+            calendar.startOfDay(for: session.completedAt)
+        }
+    }
+
+    private var dailyMiles: [Date: Double] {
+        var buckets: [Date: Double] = [:]
+        for session in runningSessions {
+            let day = calendar.startOfDay(for: session.completedAt)
+            buckets[day, default: 0] += max(0, session.run?.distanceMiles ?? 0)
+        }
+        return buckets
+    }
+
+    private var heatmapMaxMiles: Double {
+        max(0, dailyMiles.values.max() ?? 0)
+    }
+
+    private var heatmapWeeks: [[Date]] {
+        let today = calendar.startOfDay(for: Date())
+        let start = calendar.date(byAdding: .month, value: -12, to: today) ?? today
+        let firstWeek = calendar.startOfWeek(for: calendar.startOfDay(for: start))
+        let lastWeek = calendar.startOfWeek(for: today)
+
+        var weeks: [[Date]] = []
+        var cursor = firstWeek
+        while cursor <= lastWeek {
+            var week: [Date] = []
+            for offset in 0..<7 {
+                if let day = calendar.date(byAdding: .day, value: offset, to: cursor) {
+                    week.append(calendar.startOfDay(for: day))
+                }
+            }
+            weeks.append(week)
+            cursor = calendar.date(byAdding: .weekOfYear, value: 1, to: cursor) ?? cursor
+            if weeks.count > 80 {
+                break
+            }
+        }
+        return weeks
+    }
+
+    private var weekdaySymbols: [String] {
+        let base = calendar.shortStandaloneWeekdaySymbols
+        let pivot = max(0, min(base.count - 1, calendar.firstWeekday - 1))
+        return Array(base[pivot...]) + Array(base[..<pivot])
+    }
+
+    private var streakMetrics: RunningStreakMetrics {
+        let today = calendar.startOfDay(for: Date())
+        let activeRunDays = Set(
+            dailyMiles
+                .filter { $0.value >= runDayThresholdMiles }
+                .map(\.key)
+        )
+
+        var currentStreak = 0
+        var cursor = today
+        while activeRunDays.contains(cursor) {
+            currentStreak += 1
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = previous
+        }
+
+        let sortedRunDays = activeRunDays.sorted()
+        var longestStreak = 0
+        var streak = 0
+        var previous: Date?
+        for day in sortedRunDays {
+            if let previous, let dayGap = calendar.dateComponents([.day], from: previous, to: day).day, dayGap == 1 {
+                streak += 1
+            } else {
+                streak = 1
+            }
+            longestStreak = max(longestStreak, streak)
+            previous = day
+        }
+
+        let last7Start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        let last30Start = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+
+        var runs7 = 0
+        var runs30 = 0
+        var miles7 = 0.0
+        var miles30 = 0.0
+        for session in runningSessions {
+            let miles = max(0, session.run?.distanceMiles ?? 0)
+            if miles <= 0 { continue }
+            let day = calendar.startOfDay(for: session.completedAt)
+            if day >= last7Start && day <= today {
+                runs7 += 1
+                miles7 += miles
+            }
+            if day >= last30Start && day <= today {
+                runs30 += 1
+                miles30 += miles
+            }
+        }
+
+        return RunningStreakMetrics(
+            currentStreakDays: currentStreak,
+            longestStreakDays: longestStreak,
+            runsLast7Days: runs7,
+            runsLast30Days: runs30,
+            milesLast7Days: miles7,
+            milesLast30Days: miles30
+        )
+    }
+
+    private var thisWeekMiles: Double {
+        guard let interval = calendar.dateInterval(of: .weekOfYear, for: Date()) else { return 0 }
+        return runningSessions.reduce(0) { partial, session in
+            guard interval.contains(session.completedAt) else { return partial }
+            return partial + max(0, session.run?.distanceMiles ?? 0)
+        }
+    }
+
+    private var weeklyGoal: RunningGoals {
+        store.state.runningGoals
+    }
+
+    private var weeklyGoalProgress: Double {
+        guard weeklyGoal.goalEnabled, weeklyGoal.weeklyMilesGoal > 0 else { return 0 }
+        return min(1, thisWeekMiles / weeklyGoal.weeklyMilesGoal)
+    }
+
+    private var weeklyGoalPercentText: String {
+        guard weeklyGoal.goalEnabled, weeklyGoal.weeklyMilesGoal > 0 else { return "0%" }
+        let percentage = Int(((thisWeekMiles / weeklyGoal.weeklyMilesGoal) * 100).rounded())
+        return "\(max(0, percentage))%"
+    }
+
+    private var selectedDayRuns: [WorkoutSession] {
+        guard let selectedHeatmapDay else { return [] }
+        return (runningSessionsByDay[selectedHeatmapDay] ?? []).sorted { $0.completedAt < $1.completedAt }
+    }
+
+    private var selectedDayMiles: Double {
+        guard let selectedHeatmapDay else { return 0 }
+        return max(0, dailyMiles[selectedHeatmapDay] ?? 0)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Picker("Insights", selection: $selectedSection) {
+                    ForEach(InsightSection.allCases) { section in
+                        Text(section.rawValue).tag(section)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                switch selectedSection {
+                case .running:
+                    runningInsightsContent
+                case .lifting:
+                    liftingInsightsContent
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Insights")
+        .sheet(isPresented: $showGoalEditor) {
+            WeeklyMileageGoalSheet(goals: weeklyGoal) { goals in
+                store.updateRunningGoals(goals)
+            }
+        }
+        .sheet(isPresented: $showHeatmapDaySheet) {
+            heatmapDaySheet
+        }
+    }
+
+    @ViewBuilder
+    private var runningInsightsContent: some View {
+        if runningSessions.isEmpty {
+            runningEmptyStateCard
+        }
+        streaksCard
+        weeklyGoalCard
+        runningHeatmapCard
+    }
+
+    @ViewBuilder
+    private var liftingInsightsContent: some View {
+        if !hasLiftingData {
+            liftingEmptyStateCard
+        }
+        liftingThisWeekCard
+        liftingTrendsCard
+        liftingConsistencyCard
+    }
+
+    private var runningEmptyStateCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("No runs yet")
+                .font(.headline)
+            Text("Log a manual or GPS run to unlock running insights.")
+                .foregroundStyle(.secondary)
+            Button {
+                NotificationCenter.default.post(name: .navigateToWorkoutTab, object: nil)
+            } label: {
+                Text("Start Session")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .glassCard()
+    }
+
+    private var liftingEmptyStateCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("No lifting data yet")
+                .font(.headline)
+            Text("Complete lifting sets in a session to unlock lifting insights.")
+                .foregroundStyle(.secondary)
+            Button {
+                NotificationCenter.default.post(name: .navigateToWorkoutTab, object: nil)
+            } label: {
+                Text("Start Session")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .glassCard()
+    }
+
+    private var liftingThisWeekCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("This Week")
+                .font(.headline)
+
+            HStack(alignment: .firstTextBaseline) {
+                Text("Lifting Load")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(formatLoad(thisWeekLoad.liftingLoad))
+                    .font(.system(size: 34, weight: .bold, design: .rounded).monospacedDigit())
+            }
+
+            Divider()
+
+            insightMetricRow(title: "Sessions", value: "\(thisWeekLiftingSessions.count)")
+            insightMetricRow(title: "Completed sets", value: "\(thisWeekCompletedSets)")
+            insightMetricRow(
+                title: "Δ vs last week",
+                value: formattedDeltaText(liftingWeekDeltaPercent),
+                valueColor: deltaColor(liftingWeekDeltaPercent)
+            )
+        }
+        .glassCard()
+    }
+
+    private var liftingTrendsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Trends")
+                .font(.headline)
+
+            insightMetricRow(
+                title: "Load (30 days)",
+                value: formatLoad(liftingLoadLast30Days)
+            )
+            insightMetricRow(
+                title: "Avg / session",
+                value: averageLiftingLoadPerSession30Days.map(formatLoad) ?? "—"
+            )
+            insightMetricRow(
+                title: "Best day",
+                value: bestLiftingDayLast30Days.map {
+                    "\($0.date.formatted(date: .abbreviated, time: .omitted)) (\(formatLoad($0.load)))"
+                } ?? "—"
+            )
+        }
+        .glassCard()
+    }
+
+    private var liftingConsistencyCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Consistency")
+                .font(.headline)
+
+            insightMetricRow(title: "Sessions (7 days)", value: "\(liftingSessionsLast7Days.count)")
+            insightMetricRow(title: "Most common day", value: mostCommonLiftingDay)
+            insightMetricRow(title: "This month", value: "\(liftingSessionsThisMonthCount)")
+        }
+        .glassCard()
+    }
+
+    private var streaksCard: some View {
+        let metrics = streakMetrics
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Streaks")
+                .font(.headline)
+
+            HStack(spacing: 10) {
+                streakTile(title: "Current", value: "\(metrics.currentStreakDays) d")
+                streakTile(title: "Longest", value: "\(metrics.longestStreakDays) d")
+            }
+
+            Divider()
+
+            insightMetricRow(title: "Runs (7 days)", value: "\(metrics.runsLast7Days)")
+            insightMetricRow(title: "Runs (30 days)", value: "\(metrics.runsLast30Days)")
+            insightMetricRow(title: "Miles (7 days)", value: "\(String(format: "%.1f", metrics.milesLast7Days)) mi")
+            insightMetricRow(title: "Miles (30 days)", value: "\(String(format: "%.1f", metrics.milesLast30Days)) mi")
+        }
+        .glassCard()
+    }
+
+    private var weeklyGoalCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Weekly Goal")
+                .font(.headline)
+
+            if weeklyGoal.goalEnabled, weeklyGoal.weeklyMilesGoal > 0 {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(thisWeekMiles, specifier: "%.1f") / \(weeklyGoal.weeklyMilesGoal, specifier: "%.1f") mi")
+                        .font(.title3.weight(.semibold).monospacedDigit())
+                    Spacer()
+                    Text(weeklyGoalPercentText)
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                GeometryReader { proxy in
+                    let width = max(0, proxy.size.width * weeklyGoalProgress)
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.white.opacity(0.12))
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.appAccent.gradient)
+                            .frame(width: width)
+                    }
+                }
+                .frame(height: 14)
+
+                Button("Edit Goal") {
+                    showGoalEditor = true
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Text("Set a weekly mileage goal to track your progress.")
+                    .foregroundStyle(.secondary)
+                Button("Set a weekly mileage goal") {
+                    showGoalEditor = true
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .glassCard()
+    }
+
+    private var runningHeatmapCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Running Heatmap")
+                .font(.headline)
+            Text("Last 12 months")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(weekdaySymbols, id: \.self) { symbol in
+                            Text(String(symbol.prefix(1)))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .frame(height: 12)
+                        }
+                    }
+
+                    HStack(alignment: .top, spacing: 4) {
+                        ForEach(Array(heatmapWeeks.enumerated()), id: \.offset) { _, week in
+                            VStack(spacing: 4) {
+                                ForEach(week, id: \.self) { day in
+                                    heatmapDayCell(day)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            heatmapLegend
+        }
+        .glassCard()
+    }
+
+    private var heatmapLegend: some View {
+        HStack(spacing: 6) {
+            Text("0")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            legendSquare(level: 0)
+            legendSquare(level: 1)
+            legendSquare(level: 2)
+            legendSquare(level: 3)
+            Text("High")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func streakTile(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.headline.monospacedDigit())
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func insightMetricRow(title: String, value: String, valueColor: Color = .primary) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(valueColor)
+        }
+    }
+
+    private func heatmapDayCell(_ day: Date) -> some View {
+        Button {
+            selectedHeatmapDay = day
+            showHeatmapDaySheet = true
+        } label: {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(heatmapColor(for: day))
+                .frame(width: 12, height: 12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(day.formatted(date: .abbreviated, time: .omitted))")
+    }
+
+    private func legendSquare(level: Int) -> some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(heatmapColor(forLevel: level))
+            .frame(width: 12, height: 12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
+            )
+    }
+
+    private func heatmapColor(for day: Date) -> Color {
+        let miles = max(0, dailyMiles[day] ?? 0)
+        if miles <= 0 {
+            return heatmapColor(forLevel: 0)
+        }
+        if heatmapMaxMiles <= 0 {
+            return heatmapColor(forLevel: 1)
+        }
+        let normalized = miles / heatmapMaxMiles
+        if normalized < 0.34 {
+            return heatmapColor(forLevel: 1)
+        }
+        if normalized < 0.67 {
+            return heatmapColor(forLevel: 2)
+        }
+        return heatmapColor(forLevel: 3)
+    }
+
+    private func heatmapColor(forLevel level: Int) -> Color {
+        switch level {
+        case 1:
+            return Color.appAccent.opacity(0.35)
+        case 2:
+            return Color.appAccent.opacity(0.62)
+        case 3:
+            return Color.appAccent.opacity(0.88)
+        default:
+            return Color.secondary.opacity(0.18)
+        }
+    }
+
+    private var heatmapDaySheet: some View {
+        NavigationStack {
+            List {
+                Section("Summary") {
+                    Text(selectedHeatmapDay?.formatted(date: .complete, time: .omitted) ?? "")
+                    Text("Total: \(selectedDayMiles, specifier: "%.2f") mi")
+                }
+
+                Section("Runs") {
+                    if selectedDayRuns.isEmpty {
+                        Text("No runs recorded.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(selectedDayRuns) { session in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(session.name)
+                                    .font(.subheadline.weight(.semibold))
+                                let miles = max(0, session.run?.distanceMiles ?? 0)
+                                let duration = max(0, session.run?.durationSeconds ?? 0)
+                                Text("\(miles, specifier: "%.2f") mi • \(formatDuration(duration))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Day Detail")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        showHeatmapDaySheet = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func formattedDeltaText(_ delta: Double?) -> String {
+        guard let delta else { return "—" }
+        let roundedMagnitude = Int(abs(delta).rounded())
+        if delta > 0 {
+            return "↑ \(roundedMagnitude)%"
+        }
+        if delta < 0 {
+            return "↓ \(roundedMagnitude)%"
+        }
+        return "0%"
+    }
+
+    private func deltaColor(_ delta: Double?) -> Color {
+        guard let delta else { return .secondary }
+        if delta > 0 { return .accentColor }
+        if delta < 0 { return .red }
+        return .secondary
+    }
+
+    private func formatLoad(_ value: Double) -> String {
+        let roundedValue = Int(value.rounded())
+        return Self.loadFormatter.string(from: NSNumber(value: roundedValue)) ?? "\(roundedValue)"
+    }
+}
+
+struct WeeklyMileageGoalSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let goals: RunningGoals
+    var onSave: (RunningGoals) -> Void
+
+    @State private var goalEnabled: Bool
+    @State private var weeklyMilesGoal: Double
+
+    init(goals: RunningGoals, onSave: @escaping (RunningGoals) -> Void) {
+        self.goals = goals
+        self.onSave = onSave
+        _goalEnabled = State(initialValue: goals.goalEnabled)
+        _weeklyMilesGoal = State(initialValue: max(0, goals.weeklyMilesGoal))
+    }
+
+    private var canSave: Bool {
+        !goalEnabled || weeklyMilesGoal > 0
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Goal") {
+                    Toggle("Enable weekly goal", isOn: $goalEnabled)
+
+                    Stepper(value: $weeklyMilesGoal, in: 0...250, step: 0.5) {
+                        HStack {
+                            Text("Weekly miles")
+                            Spacer()
+                            Text("\(weeklyMilesGoal, specifier: "%.1f") mi")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(!goalEnabled)
+                }
+            }
+            .navigationTitle("Weekly Goal")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        let updated = RunningGoals(
+                            weeklyMilesGoal: weeklyMilesGoal,
+                            goalEnabled: goalEnabled
+                        )
+                        onSave(updated)
+                        dismiss()
+                    }
+                    .disabled(!canSave)
+                }
+            }
+        }
     }
 }
 
@@ -4964,8 +6186,14 @@ struct SessionRowView: View {
     }
 }
 
+// MARK: - Run Detail Pace UI (RUN-DETAIL-D1)
+// Changes:
+// - RUN-DETAIL-D1: Added GPS pace chart section with smoothed pace series rendering.
+// - RUN-DETAIL-D2: Added moving average pace + best 0.5/1/2 mi segment highlight pills.
+// - RUN-DETAIL-D3: Added lazy analytics cache backfill when opening run detail.
 struct SessionDetailView: View {
     @EnvironmentObject private var store: TrainingStore
+    @State private var didBackfillAnalytics = false
 
     let sessionID: UUID
 
@@ -5044,44 +6272,185 @@ struct SessionDetailView: View {
 
                     if let run = session.run {
                         Section("Run") {
-                            Text("\(run.mode.rawValue) run")
-                                .font(.headline)
-                            Text("Distance: \(run.distanceMiles, specifier: "%.2f") mi")
-                            Text("Duration: \(formatDuration(run.durationSeconds))")
-                            if let pace = run.avgPaceSecPerMile {
-                                Text("Avg Pace: \(formatPacePerMile(pace))")
-                            }
-                            if let route = run.route, !route.isEmpty {
-                                RunRouteMapView(route: route)
-                            }
-                            if !run.splits.isEmpty {
-                                Divider()
-                                ForEach(run.splits) { split in
-                                    HStack {
-                                        Text("Split \(split.index)")
-                                        Spacer()
-                                        Text("\(split.distanceMiles, specifier: "%.2f") mi")
-                                            .monospacedDigit()
-                                        Text(formatDuration(split.durationSeconds))
-                                            .monospacedDigit()
-                                        Text(formatPacePerMile(split.paceSecPerMile))
-                                            .monospacedDigit()
-                                    }
-                                    .font(.footnote)
-                                }
-                            }
-                            if !run.notes.isEmpty {
-                                Text(run.notes)
-                                    .foregroundStyle(.secondary)
-                            }
+                            runSection(run)
                         }
                     }
                 }
                 .navigationTitle(session.name)
+                .onAppear {
+                    if !didBackfillAnalytics {
+                        didBackfillAnalytics = true
+                        store.ensureRunAnalyticsCached(for: sessionID)
+                    }
+                }
             } else {
                 ContentUnavailableView("Session not found", systemImage: "clock.badge.xmark")
             }
         }
+    }
+
+    @ViewBuilder
+    private func runSection(_ run: RunEntry) -> some View {
+        let analytics = RunAnalytics.snapshot(for: run)
+        Text("\(run.mode.rawValue) run")
+            .font(.headline)
+
+        Text("Distance: \(run.distanceMiles, specifier: "%.2f") mi")
+        Text("Duration: \(formatDuration(run.durationSeconds))")
+        if let pace = run.avgPaceSecPerMile {
+            Text("Avg Pace: \(formatPacePerMile(pace))")
+        }
+
+        if let route = run.route, !route.isEmpty {
+            RunRouteMapView(route: route)
+        }
+
+        if run.mode == .gps {
+            paceSection(run: run, analytics: analytics)
+        } else {
+            Text("Pace chart available for GPS runs.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+
+        if !run.splits.isEmpty {
+            Divider()
+            ForEach(run.splits) { split in
+                HStack {
+                    Text("Split \(split.index)")
+                    Spacer()
+                    Text("\(split.distanceMiles, specifier: "%.2f") mi")
+                        .monospacedDigit()
+                    Text(formatDuration(split.durationSeconds))
+                        .monospacedDigit()
+                    Text(formatPacePerMile(split.paceSecPerMile))
+                        .monospacedDigit()
+                }
+                .font(.footnote)
+            }
+        }
+
+        if !run.notes.isEmpty {
+            Text(run.notes)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func paceSection(run: RunEntry, analytics: RunAnalyticsSnapshot) -> some View {
+        Divider()
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Pace")
+                .font(.subheadline.weight(.semibold))
+
+            if analytics.paceSeries.count >= 2 {
+                Chart(analytics.paceSeries) { point in
+                    LineMark(
+                        x: .value("Distance", point.mile),
+                        y: .value("Pace", point.paceSecPerMile)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(Color.appAccent.gradient)
+                }
+                .chartXAxis {
+                    AxisMarks(position: .bottom) { value in
+                        if let mile = value.as(Double.self) {
+                            AxisValueLabel("\(mile, specifier: "%.1f")")
+                        }
+                        AxisGridLine()
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        if let pace = value.as(Double.self) {
+                            AxisValueLabel(formatPacePerMile(Int(pace.rounded())))
+                        }
+                        AxisGridLine()
+                    }
+                }
+                .chartYScale(domain: paceRange(for: analytics.paceSeries))
+                .frame(height: 210)
+            } else {
+                Text("Pace chart available after enough GPS route samples are captured.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            paceStatsRow(run: run, analytics: analytics)
+        }
+    }
+
+    private func paceStatsRow(run: RunEntry, analytics: RunAnalyticsSnapshot) -> some View {
+        let movingPace = analytics.movingAvgPaceSecPerMile
+        let best = run.bestSegments ?? analytics.bestSegments
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                pacePill(
+                    title: "Avg (moving)",
+                    value: movingPace.map { formatPacePerMile(Int($0.rounded())) } ?? "--"
+                )
+                pacePill(
+                    title: "Best 0.5 mi",
+                    value: formattedBestSegment(best?.halfMileBestSeconds, lengthMiles: 0.5)
+                )
+                pacePill(
+                    title: "Best 1 mi",
+                    value: formattedBestSegment(best?.mileBestSeconds, lengthMiles: 1.0)
+                )
+                pacePill(
+                    title: "Best 2 mi",
+                    value: formattedBestSegment(best?.twoMileBestSeconds, lengthMiles: 2.0)
+                )
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func pacePill(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func formattedBestSegment(_ seconds: Double?, lengthMiles: Double) -> String {
+        guard let seconds, seconds > 0 else { return "--" }
+        let clampedSeconds = max(1, Int(seconds.rounded()))
+        let pacePerMile = Int((seconds / lengthMiles).rounded())
+        return "\(formatClock(clampedSeconds)) (\(formatPacePerMile(pacePerMile)))"
+    }
+
+    private func formatClock(_ seconds: Int) -> String {
+        let clamped = max(0, seconds)
+        if clamped >= 3600 {
+            let hours = clamped / 3600
+            let minutes = (clamped % 3600) / 60
+            let secs = clamped % 60
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        let minutes = clamped / 60
+        let secs = clamped % 60
+        return String(format: "%d:%02d", minutes, secs)
+    }
+
+    private func paceRange(for points: [RunPacePoint]) -> ClosedRange<Double> {
+        guard let minValue = points.map(\.paceSecPerMile).min(), let maxValue = points.map(\.paceSecPerMile).max() else {
+            return 240...1800
+        }
+        let lower = max(240, minValue - 30)
+        let upper = min(1800, maxValue + 30)
+        if lower < upper {
+            return lower...upper
+        }
+        return max(240, lower - 30)...min(1800, upper + 30)
     }
 
     private func formatPacePerMile(_ seconds: Int) -> String {
@@ -5587,6 +6956,17 @@ enum Haptics {
 private extension Calendar {
     func startOfMonth(for date: Date) -> Date {
         self.date(from: dateComponents([.year, .month], from: date)) ?? startOfDay(for: date)
+    }
+
+    func startOfWeek(for date: Date) -> Date {
+        let components = dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
+        return self.date(from: components) ?? startOfDay(for: date)
+    }
+}
+
+private extension Double {
+    func clamped(min minimum: Double, max maximum: Double) -> Double {
+        Swift.max(minimum, Swift.min(maximum, self))
     }
 }
 
