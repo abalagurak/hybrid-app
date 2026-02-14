@@ -2555,7 +2555,7 @@ struct MainTabsView: View {
             .badge(store.state.activeSession == nil ? 0 : 1)
 
             NavigationStack {
-                InsightsView()
+                PremiumInsightsView()
             }
             .tabItem {
                 Label("Insights", systemImage: "chart.bar")
