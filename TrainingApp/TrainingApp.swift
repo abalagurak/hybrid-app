@@ -425,17 +425,13 @@ enum DistanceSource: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-// MARK: - Running Data Model Updates (RUN-MODEL-M1)
-// Changes:
-// - RUN-MODEL-M1: Extended coordinate samples with optional altitude/accuracy decoding fallback.
-// - RUN-MODEL-M2: Added persisted run analytics fields (`paceSeries`, `bestSegments`) to `RunEntry`.
-// - RUN-MODEL-M3: Added persisted weekly goal settings (`RunningGoals`) to app state.
 struct CoordinatePoint: Codable, Hashable {
     var latitude: Double
     var longitude: Double
     var timestamp: Date
     var altitudeMeters: Double?
-    var horizontalAccuracy: Double?
+    var horizontalAccuracy: Double
+    var speedMetersPerSecond: Double?
 
     enum CodingKeys: String, CodingKey {
         case latitude
@@ -443,8 +439,7 @@ struct CoordinatePoint: Codable, Hashable {
         case timestamp
         case altitudeMeters
         case horizontalAccuracy
-        case altitude
-        case accuracy
+        case speedMetersPerSecond
     }
 
     init(
@@ -452,13 +447,15 @@ struct CoordinatePoint: Codable, Hashable {
         longitude: Double,
         timestamp: Date,
         altitudeMeters: Double? = nil,
-        horizontalAccuracy: Double? = nil
+        horizontalAccuracy: Double = 20,
+        speedMetersPerSecond: Double? = nil
     ) {
         self.latitude = latitude
         self.longitude = longitude
         self.timestamp = timestamp
         self.altitudeMeters = altitudeMeters
         self.horizontalAccuracy = horizontalAccuracy
+        self.speedMetersPerSecond = speedMetersPerSecond
     }
 
     init(from decoder: Decoder) throws {
@@ -467,9 +464,8 @@ struct CoordinatePoint: Codable, Hashable {
         longitude = try container.decodeIfPresent(Double.self, forKey: .longitude) ?? 0
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
         altitudeMeters = try container.decodeIfPresent(Double.self, forKey: .altitudeMeters)
-            ?? container.decodeIfPresent(Double.self, forKey: .altitude)
-        horizontalAccuracy = try container.decodeIfPresent(Double.self, forKey: .horizontalAccuracy)
-            ?? container.decodeIfPresent(Double.self, forKey: .accuracy)
+        horizontalAccuracy = try container.decodeIfPresent(Double.self, forKey: .horizontalAccuracy) ?? 20
+        speedMetersPerSecond = try container.decodeIfPresent(Double.self, forKey: .speedMetersPerSecond)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -478,68 +474,183 @@ struct CoordinatePoint: Codable, Hashable {
         try container.encode(longitude, forKey: .longitude)
         try container.encode(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(altitudeMeters, forKey: .altitudeMeters)
-        try container.encodeIfPresent(horizontalAccuracy, forKey: .horizontalAccuracy)
+        try container.encode(horizontalAccuracy, forKey: .horizontalAccuracy)
+        try container.encodeIfPresent(speedMetersPerSecond, forKey: .speedMetersPerSecond)
     }
+}
+
+struct RunElevationPoint: Codable, Hashable {
+    var mile: Double
+    var elevationFeet: Double
 }
 
 struct RunSplit: Codable, Hashable, Identifiable {
     var id: UUID = UUID()
-    var index: Int
-    var distanceMiles: Double
-    var durationSeconds: Int
-    var paceSecPerMile: Int
-}
+    var splitIndex: Int
+    var startMile: Double
+    var endMile: Double
+    var splitSeconds: Int
+    var splitPaceSecPerMile: Int
 
-struct RunPacePoint: Codable, Hashable, Identifiable {
-    var mile: Double
-    var paceSecPerMile: Double
-
-    var id: Double { mile }
-
-    init(mile: Double, paceSecPerMile: Double) {
-        self.mile = mile
-        self.paceSecPerMile = paceSecPerMile
+    enum CodingKeys: String, CodingKey {
+        case id
+        case splitIndex
+        case startMile
+        case endMile
+        case splitSeconds
+        case splitPaceSecPerMile
+        case index
+        case distanceMiles
+        case durationSeconds
+        case paceSecPerMile
     }
-}
 
-struct RunBestSegments: Codable, Hashable {
-    var halfMileBestSeconds: Double?
-    var mileBestSeconds: Double?
-    var twoMileBestSeconds: Double?
-    var halfMileStartMile: Double?
-    var halfMileEndMile: Double?
-    var mileStartMile: Double?
-    var mileEndMile: Double?
-    var twoMileStartMile: Double?
-    var twoMileEndMile: Double?
+    init(
+        id: UUID = UUID(),
+        splitIndex: Int,
+        startMile: Double,
+        endMile: Double,
+        splitSeconds: Int,
+        splitPaceSecPerMile: Int
+    ) {
+        self.id = id
+        self.splitIndex = max(1, splitIndex)
+        self.startMile = max(0, startMile)
+        self.endMile = max(self.startMile, endMile)
+        self.splitSeconds = max(0, splitSeconds)
+        self.splitPaceSecPerMile = max(0, splitPaceSecPerMile)
+    }
+
+    init(
+        id: UUID = UUID(),
+        index: Int,
+        distanceMiles: Double,
+        durationSeconds: Int,
+        paceSecPerMile: Int
+    ) {
+        let normalizedIndex = max(1, index)
+        let start = max(0, Double(normalizedIndex - 1))
+        let end = start + max(0, distanceMiles)
+        self.init(
+            id: id,
+            splitIndex: normalizedIndex,
+            startMile: start,
+            endMile: end,
+            splitSeconds: durationSeconds,
+            splitPaceSecPerMile: paceSecPerMile
+        )
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        splitIndex = max(
+            1,
+            try container.decodeIfPresent(Int.self, forKey: .splitIndex)
+                ?? container.decodeIfPresent(Int.self, forKey: .index)
+                ?? 1
+        )
+
+        if
+            let start = try container.decodeIfPresent(Double.self, forKey: .startMile),
+            let end = try container.decodeIfPresent(Double.self, forKey: .endMile)
+        {
+            startMile = max(0, start)
+            endMile = max(startMile, end)
+        } else {
+            let legacyDistance = max(0, try container.decodeIfPresent(Double.self, forKey: .distanceMiles) ?? 1)
+            startMile = max(0, Double(splitIndex - 1))
+            endMile = startMile + legacyDistance
+        }
+
+        splitSeconds = max(
+            0,
+            try container.decodeIfPresent(Int.self, forKey: .splitSeconds)
+                ?? container.decodeIfPresent(Int.self, forKey: .durationSeconds)
+                ?? 0
+        )
+        let splitDistance = max(0, endMile - startMile)
+
+        let decodedPace = try container.decodeIfPresent(Int.self, forKey: .splitPaceSecPerMile)
+            ?? container.decodeIfPresent(Int.self, forKey: .paceSecPerMile)
+        if let decodedPace {
+            splitPaceSecPerMile = max(0, decodedPace)
+        } else if splitDistance > 0 {
+            splitPaceSecPerMile = Int((Double(splitSeconds) / splitDistance).rounded())
+        } else {
+            splitPaceSecPerMile = 0
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(splitIndex, forKey: .splitIndex)
+        try container.encode(startMile, forKey: .startMile)
+        try container.encode(endMile, forKey: .endMile)
+        try container.encode(splitSeconds, forKey: .splitSeconds)
+        try container.encode(splitPaceSecPerMile, forKey: .splitPaceSecPerMile)
+    }
+
+    var index: Int {
+        get { splitIndex }
+        set { splitIndex = max(1, newValue) }
+    }
+
+    var distanceMiles: Double {
+        get { max(0, endMile - startMile) }
+        set { endMile = startMile + max(0, newValue) }
+    }
+
+    var durationSeconds: Int {
+        get { splitSeconds }
+        set { splitSeconds = max(0, newValue) }
+    }
+
+    var paceSecPerMile: Int {
+        get { splitPaceSecPerMile }
+        set { splitPaceSecPerMile = max(0, newValue) }
+    }
 }
 
 struct RunEntry: Codable, Hashable {
     var mode: RunMode
     var distanceMiles: Double
     var durationSeconds: Int
+    var elapsedSeconds: Int
+    var movingSeconds: Int
     var notes: String
     var route: [CoordinatePoint]?
     var splits: [RunSplit]
+    var elevationSeries: [RunElevationPoint]
     var avgPaceSecPerMile: Int?
+    var avgPaceElapsedSecPerMile: Int?
+    var avgPaceMovingSecPerMile: Int?
     var elevationGainFeet: Double?
+    var elevationLossFeet: Double?
+    var minElevationFeet: Double?
+    var maxElevationFeet: Double?
     var distanceSource: DistanceSource
-    var paceSeries: [RunPacePoint]
-    var bestSegments: RunBestSegments?
 
     enum CodingKeys: String, CodingKey {
         case mode
         case distanceMiles
         case distanceKm
         case durationSeconds
+        case elapsedSeconds
+        case movingSeconds
         case notes
         case route
         case splits
+        case elevationSeries
         case avgPaceSecPerMile
+        case avgPaceElapsedSecPerMile
+        case avgPaceMovingSecPerMile
         case elevationGainFeet
+        case elevationLossFeet
+        case minElevationFeet
+        case maxElevationFeet
         case distanceSource
-        case paceSeries
-        case bestSegments
     }
 
     init(
@@ -552,20 +663,41 @@ struct RunEntry: Codable, Hashable {
         avgPaceSecPerMile: Int? = nil,
         elevationGainFeet: Double? = nil,
         distanceSource: DistanceSource? = nil,
-        paceSeries: [RunPacePoint] = [],
-        bestSegments: RunBestSegments? = nil
+        elapsedSeconds: Int? = nil,
+        movingSeconds: Int? = nil,
+        avgPaceElapsedSecPerMile: Int? = nil,
+        avgPaceMovingSecPerMile: Int? = nil,
+        elevationLossFeet: Double? = nil,
+        minElevationFeet: Double? = nil,
+        maxElevationFeet: Double? = nil,
+        elevationSeries: [RunElevationPoint] = []
     ) {
         self.mode = mode
-        self.distanceMiles = distanceMiles
-        self.durationSeconds = durationSeconds
+        self.distanceMiles = max(0, distanceMiles)
+        self.durationSeconds = max(0, durationSeconds)
+        self.elapsedSeconds = max(0, elapsedSeconds ?? durationSeconds)
+        self.movingSeconds = max(0, movingSeconds ?? self.elapsedSeconds)
         self.notes = notes
         self.route = route
         self.splits = splits
+        self.elevationSeries = elevationSeries
         self.avgPaceSecPerMile = avgPaceSecPerMile
+        self.avgPaceElapsedSecPerMile = avgPaceElapsedSecPerMile ?? avgPaceSecPerMile
+        self.avgPaceMovingSecPerMile = avgPaceMovingSecPerMile
         self.elevationGainFeet = elevationGainFeet
+        self.elevationLossFeet = elevationLossFeet
+        self.minElevationFeet = minElevationFeet
+        self.maxElevationFeet = maxElevationFeet
         self.distanceSource = distanceSource ?? (mode == .gps ? .gps : .manual)
-        self.paceSeries = paceSeries
-        self.bestSegments = bestSegments
+        if self.avgPaceElapsedSecPerMile == nil, self.distanceMiles > 0, self.elapsedSeconds > 0 {
+            self.avgPaceElapsedSecPerMile = Int((Double(self.elapsedSeconds) / self.distanceMiles).rounded())
+        }
+        if self.avgPaceMovingSecPerMile == nil, self.distanceMiles > 0, self.movingSeconds > 0 {
+            self.avgPaceMovingSecPerMile = Int((Double(self.movingSeconds) / self.distanceMiles).rounded())
+        }
+        if self.avgPaceSecPerMile == nil {
+            self.avgPaceSecPerMile = self.avgPaceElapsedSecPerMile
+        }
     }
 
     init(from decoder: Decoder) throws {
@@ -578,19 +710,42 @@ struct RunEntry: Codable, Hashable {
         } else {
             distanceMiles = 0
         }
-        durationSeconds = try container.decodeIfPresent(Int.self, forKey: .durationSeconds) ?? 0
+        durationSeconds = max(0, try container.decodeIfPresent(Int.self, forKey: .durationSeconds) ?? 0)
+        elapsedSeconds = max(
+            0,
+            try container.decodeIfPresent(Int.self, forKey: .elapsedSeconds) ?? durationSeconds
+        )
+        movingSeconds = max(
+            0,
+            try container.decodeIfPresent(Int.self, forKey: .movingSeconds) ?? elapsedSeconds
+        )
+        if durationSeconds == 0, elapsedSeconds > 0 {
+            durationSeconds = elapsedSeconds
+        }
         notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
         route = try container.decodeIfPresent([CoordinatePoint].self, forKey: .route)
         splits = try container.decodeIfPresent([RunSplit].self, forKey: .splits) ?? []
+        elevationSeries = try container.decodeIfPresent([RunElevationPoint].self, forKey: .elevationSeries) ?? []
         avgPaceSecPerMile = try container.decodeIfPresent(Int.self, forKey: .avgPaceSecPerMile)
-        if avgPaceSecPerMile == nil, distanceMiles > 0, durationSeconds > 0 {
-            avgPaceSecPerMile = Int((Double(durationSeconds) / distanceMiles).rounded())
+        avgPaceElapsedSecPerMile = try container.decodeIfPresent(Int.self, forKey: .avgPaceElapsedSecPerMile)
+            ?? avgPaceSecPerMile
+        avgPaceMovingSecPerMile = try container.decodeIfPresent(Int.self, forKey: .avgPaceMovingSecPerMile)
+
+        if avgPaceElapsedSecPerMile == nil, distanceMiles > 0, elapsedSeconds > 0 {
+            avgPaceElapsedSecPerMile = Int((Double(elapsedSeconds) / distanceMiles).rounded())
+        }
+        if avgPaceMovingSecPerMile == nil, distanceMiles > 0, movingSeconds > 0 {
+            avgPaceMovingSecPerMile = Int((Double(movingSeconds) / distanceMiles).rounded())
+        }
+        if avgPaceSecPerMile == nil {
+            avgPaceSecPerMile = avgPaceElapsedSecPerMile
         }
         elevationGainFeet = try container.decodeIfPresent(Double.self, forKey: .elevationGainFeet)
+        elevationLossFeet = try container.decodeIfPresent(Double.self, forKey: .elevationLossFeet)
+        minElevationFeet = try container.decodeIfPresent(Double.self, forKey: .minElevationFeet)
+        maxElevationFeet = try container.decodeIfPresent(Double.self, forKey: .maxElevationFeet)
         distanceSource = try container.decodeIfPresent(DistanceSource.self, forKey: .distanceSource)
             ?? (mode == .gps ? .gps : .manual)
-        paceSeries = try container.decodeIfPresent([RunPacePoint].self, forKey: .paceSeries) ?? []
-        bestSegments = try container.decodeIfPresent(RunBestSegments.self, forKey: .bestSegments)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -598,15 +753,58 @@ struct RunEntry: Codable, Hashable {
         try container.encode(mode, forKey: .mode)
         try container.encode(distanceMiles, forKey: .distanceMiles)
         try container.encode(durationSeconds, forKey: .durationSeconds)
+        try container.encode(elapsedSeconds, forKey: .elapsedSeconds)
+        try container.encode(movingSeconds, forKey: .movingSeconds)
         try container.encode(notes, forKey: .notes)
         try container.encodeIfPresent(route, forKey: .route)
         try container.encode(splits, forKey: .splits)
+        try container.encode(elevationSeries, forKey: .elevationSeries)
         try container.encodeIfPresent(avgPaceSecPerMile, forKey: .avgPaceSecPerMile)
+        try container.encodeIfPresent(avgPaceElapsedSecPerMile, forKey: .avgPaceElapsedSecPerMile)
+        try container.encodeIfPresent(avgPaceMovingSecPerMile, forKey: .avgPaceMovingSecPerMile)
         try container.encodeIfPresent(elevationGainFeet, forKey: .elevationGainFeet)
+        try container.encodeIfPresent(elevationLossFeet, forKey: .elevationLossFeet)
+        try container.encodeIfPresent(minElevationFeet, forKey: .minElevationFeet)
+        try container.encodeIfPresent(maxElevationFeet, forKey: .maxElevationFeet)
         try container.encode(distanceSource, forKey: .distanceSource)
-        try container.encode(paceSeries, forKey: .paceSeries)
-        try container.encodeIfPresent(bestSegments, forKey: .bestSegments)
     }
+}
+
+enum RunningPRType: String, Codable, CaseIterable, Identifiable {
+    case mile1
+    case k5
+    case k10
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .mile1:
+            return "1 Mile"
+        case .k5:
+            return "5K"
+        case .k10:
+            return "10K"
+        }
+    }
+
+    var targetMiles: Double {
+        switch self {
+        case .mile1:
+            return 1.0
+        case .k5:
+            return 3.106855
+        case .k10:
+            return 6.21371
+        }
+    }
+}
+
+struct RunningPRRecord: Codable, Hashable {
+    var type: RunningPRType
+    var bestSeconds: Int
+    var achievedAt: Date
+    var sessionId: UUID
 }
 
 enum PRType: String, Codable, CaseIterable, Identifiable {
@@ -802,29 +1000,6 @@ struct SetMemory: Codable {
     var style: SetStyle
 }
 
-struct RunningGoals: Codable, Hashable {
-    var weeklyMilesGoal: Double
-    var goalEnabled: Bool
-
-    static let disabled = RunningGoals(weeklyMilesGoal: 0, goalEnabled: false)
-
-    enum CodingKeys: String, CodingKey {
-        case weeklyMilesGoal
-        case goalEnabled
-    }
-
-    init(weeklyMilesGoal: Double = 0, goalEnabled: Bool = false) {
-        self.weeklyMilesGoal = max(0, weeklyMilesGoal)
-        self.goalEnabled = goalEnabled
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        weeklyMilesGoal = max(0, try container.decodeIfPresent(Double.self, forKey: .weeklyMilesGoal) ?? 0)
-        goalEnabled = try container.decodeIfPresent(Bool.self, forKey: .goalEnabled) ?? false
-    }
-}
-
 struct StoredAppState: Codable {
     var account: UserAccount?
     var theme: AppTheme
@@ -834,9 +1009,9 @@ struct StoredAppState: Codable {
     var sessions: [WorkoutSession]
     var lastSetMemory: [String: SetMemory]
     var activeSession: WorkoutSessionDraft?
+    var runningPRs: [RunningPRType: RunningPRRecord]
     var preferences: UserPreferences
     var bodyWeightEntries: [BodyWeightEntry]
-    var runningGoals: RunningGoals
 
     enum CodingKeys: String, CodingKey {
         case account
@@ -847,9 +1022,9 @@ struct StoredAppState: Codable {
         case sessions
         case lastSetMemory
         case activeSession
+        case runningPRs
         case preferences
         case bodyWeightEntries
-        case runningGoals
     }
 
     init(
@@ -861,9 +1036,9 @@ struct StoredAppState: Codable {
         sessions: [WorkoutSession],
         lastSetMemory: [String: SetMemory],
         activeSession: WorkoutSessionDraft?,
+        runningPRs: [RunningPRType: RunningPRRecord] = [:],
         preferences: UserPreferences = .default,
-        bodyWeightEntries: [BodyWeightEntry] = [],
-        runningGoals: RunningGoals = .disabled
+        bodyWeightEntries: [BodyWeightEntry] = []
     ) {
         self.account = account
         self.theme = theme
@@ -873,9 +1048,9 @@ struct StoredAppState: Codable {
         self.sessions = sessions
         self.lastSetMemory = lastSetMemory
         self.activeSession = activeSession
+        self.runningPRs = runningPRs
         self.preferences = preferences
         self.bodyWeightEntries = bodyWeightEntries.sorted { $0.recordedAt < $1.recordedAt }
-        self.runningGoals = runningGoals
     }
 
     init(from decoder: Decoder) throws {
@@ -888,10 +1063,35 @@ struct StoredAppState: Codable {
         sessions = try container.decodeIfPresent([WorkoutSession].self, forKey: .sessions) ?? []
         lastSetMemory = try container.decodeIfPresent([String: SetMemory].self, forKey: .lastSetMemory) ?? [:]
         activeSession = try container.decodeIfPresent(WorkoutSessionDraft.self, forKey: .activeSession)
+        if let decodedPRs = try container.decodeIfPresent([String: RunningPRRecord].self, forKey: .runningPRs) {
+            runningPRs = decodedPRs.reduce(into: [:]) { partial, pair in
+                guard let key = RunningPRType(rawValue: pair.key) else { return }
+                partial[key] = pair.value
+            }
+        } else {
+            runningPRs = try container.decodeIfPresent([RunningPRType: RunningPRRecord].self, forKey: .runningPRs) ?? [:]
+        }
         preferences = try container.decodeIfPresent(UserPreferences.self, forKey: .preferences) ?? .default
         bodyWeightEntries = (try container.decodeIfPresent([BodyWeightEntry].self, forKey: .bodyWeightEntries) ?? [])
             .sorted { $0.recordedAt < $1.recordedAt }
-        runningGoals = try container.decodeIfPresent(RunningGoals.self, forKey: .runningGoals) ?? .disabled
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(account, forKey: .account)
+        try container.encode(theme, forKey: .theme)
+        try container.encode(exerciseLibrary, forKey: .exerciseLibrary)
+        try container.encode(folders, forKey: .folders)
+        try container.encode(templates, forKey: .templates)
+        try container.encode(sessions, forKey: .sessions)
+        try container.encode(lastSetMemory, forKey: .lastSetMemory)
+        try container.encodeIfPresent(activeSession, forKey: .activeSession)
+        let encodedPRs = runningPRs.reduce(into: [String: RunningPRRecord]()) { partial, pair in
+            partial[pair.key.rawValue] = pair.value
+        }
+        try container.encode(encodedPRs, forKey: .runningPRs)
+        try container.encode(preferences, forKey: .preferences)
+        try container.encode(bodyWeightEntries, forKey: .bodyWeightEntries)
     }
 
     static let initial = StoredAppState(
@@ -903,9 +1103,9 @@ struct StoredAppState: Codable {
         sessions: [],
         lastSetMemory: [:],
         activeSession: nil,
+        runningPRs: [:],
         preferences: .default,
-        bodyWeightEntries: [],
-        runningGoals: .disabled
+        bodyWeightEntries: []
     )
 }
 
@@ -920,316 +1120,6 @@ struct BodyWeightProgressPoint: Identifiable {
     let id = UUID()
     let date: Date
     let weightKg: Double
-}
-
-// MARK: - Running Analytics (RUN-ANALYTICS-A1)
-// Changes:
-// - RUN-ANALYTICS-A1: Added GPS pace-series computation with filtering, smoothing, and downsampling.
-// - RUN-ANALYTICS-A2: Added best contiguous segment scan (0.5/1.0/2.0 mi) using two pointers + interpolation.
-// - RUN-ANALYTICS-A3: Added helper snapshot used by run finalization, lazy cache backfill, and UI.
-private struct RunAnalyticsSnapshot {
-    var paceSeries: [RunPacePoint]
-    var bestSegments: RunBestSegments?
-    var movingDistanceMiles: Double
-    var movingDurationSeconds: Double
-
-    var movingAvgPaceSecPerMile: Double? {
-        guard movingDistanceMiles > 0, movingDurationSeconds > 0 else { return nil }
-        return movingDurationSeconds / movingDistanceMiles
-    }
-}
-
-private struct RunDistanceTimePoint {
-    var distanceMiles: Double
-    var elapsedSeconds: Double
-}
-
-private struct RunBestSegmentCandidate {
-    var durationSeconds: Double
-    var startMile: Double
-    var endMile: Double
-}
-
-private enum RunAnalytics {
-    private static let metersPerMile = 1609.344
-    private static let maxAccuracyMeters = 50.0
-    private static let minMovingSpeedMetersPerSecond = 0.8
-    private static let minMovingDistanceMeters = 2.0
-    private static let minPaceIntervalMiles = 0.005
-    private static let minPaceSecPerMile = 240.0
-    private static let maxPaceSecPerMile = 1800.0
-    private static let smoothingWindow = 5
-    private static let maxPaceSeriesPoints = 300
-
-    static func snapshot(for run: RunEntry) -> RunAnalyticsSnapshot {
-        guard run.mode == .gps, let route = run.route, route.count >= 2 else {
-            return RunAnalyticsSnapshot(
-                paceSeries: run.paceSeries,
-                bestSegments: run.bestSegments,
-                movingDistanceMiles: 0,
-                movingDurationSeconds: 0
-            )
-        }
-
-        let sorted = route.sorted { $0.timestamp < $1.timestamp }
-        var acceptedPoints: [RunDistanceTimePoint] = [.init(distanceMiles: 0, elapsedSeconds: 0)]
-        var paceSeriesRaw: [RunPacePoint] = []
-        var cumulativeMiles = 0.0
-        var movingSeconds = 0.0
-
-        for index in 1..<sorted.count {
-            let previous = sorted[index - 1]
-            let current = sorted[index]
-            let deltaSeconds = current.timestamp.timeIntervalSince(previous.timestamp)
-            if deltaSeconds <= 0 {
-                continue
-            }
-            if isBadAccuracy(previous.horizontalAccuracy) || isBadAccuracy(current.horizontalAccuracy) {
-                continue
-            }
-
-            let deltaMeters = CLLocation(
-                latitude: previous.latitude,
-                longitude: previous.longitude
-            ).distance(from: CLLocation(latitude: current.latitude, longitude: current.longitude))
-            if deltaMeters <= 0 {
-                continue
-            }
-
-            let speed = deltaMeters / deltaSeconds
-            let isMoving = speed >= minMovingSpeedMetersPerSecond || deltaMeters >= minMovingDistanceMeters
-            if !isMoving {
-                continue
-            }
-
-            let deltaMiles = deltaMeters / metersPerMile
-            if deltaMiles <= 0 {
-                continue
-            }
-
-            cumulativeMiles += deltaMiles
-            movingSeconds += deltaSeconds
-            acceptedPoints.append(
-                RunDistanceTimePoint(
-                    distanceMiles: cumulativeMiles,
-                    elapsedSeconds: movingSeconds
-                )
-            )
-
-            if deltaMiles < minPaceIntervalMiles {
-                continue
-            }
-
-            let instantPace = (deltaSeconds / deltaMiles).clamped(
-                min: minPaceSecPerMile,
-                max: maxPaceSecPerMile
-            )
-            paceSeriesRaw.append(
-                RunPacePoint(
-                    mile: cumulativeMiles,
-                    paceSecPerMile: instantPace
-                )
-            )
-        }
-
-        let smoothed = smoothPace(points: paceSeriesRaw, window: smoothingWindow)
-        let downsampled = downsamplePace(points: smoothed, maxCount: maxPaceSeriesPoints)
-        let bestSegments = buildBestSegments(from: acceptedPoints)
-
-        return RunAnalyticsSnapshot(
-            paceSeries: downsampled,
-            bestSegments: bestSegments,
-            movingDistanceMiles: cumulativeMiles,
-            movingDurationSeconds: movingSeconds
-        )
-    }
-
-    static func shouldBackfill(run: RunEntry, snapshot: RunAnalyticsSnapshot) -> Bool {
-        guard run.mode == .gps, let route = run.route, route.count >= 2 else { return false }
-
-        let missingPaceSeries = run.paceSeries.isEmpty && !snapshot.paceSeries.isEmpty
-        let missingBestSegments = run.bestSegments == nil && snapshot.bestSegments != nil
-        return missingPaceSeries || missingBestSegments
-    }
-
-    private static func isBadAccuracy(_ accuracy: Double?) -> Bool {
-        guard let accuracy else { return false }
-        if accuracy < 0 {
-            return true
-        }
-        return accuracy > maxAccuracyMeters
-    }
-
-    private static func smoothPace(points: [RunPacePoint], window: Int) -> [RunPacePoint] {
-        guard !points.isEmpty else { return [] }
-        guard window > 1 else { return points }
-
-        var buffer: [Double] = []
-        buffer.reserveCapacity(window)
-        var runningSum = 0.0
-        var smoothed: [RunPacePoint] = []
-        smoothed.reserveCapacity(points.count)
-
-        for point in points {
-            buffer.append(point.paceSecPerMile)
-            runningSum += point.paceSecPerMile
-            if buffer.count > window {
-                runningSum -= buffer.removeFirst()
-            }
-            let averagedPace = runningSum / Double(buffer.count)
-            smoothed.append(
-                RunPacePoint(
-                    mile: point.mile,
-                    paceSecPerMile: averagedPace
-                )
-            )
-        }
-
-        return smoothed
-    }
-
-    private static func downsamplePace(points: [RunPacePoint], maxCount: Int) -> [RunPacePoint] {
-        guard points.count > maxCount, maxCount > 2 else { return points }
-        let totalDistance = points.last?.mile ?? 0
-        guard totalDistance > 0 else { return Array(points.prefix(maxCount)) }
-
-        var sampled: [RunPacePoint] = []
-        sampled.reserveCapacity(maxCount)
-
-        var lowerIndex = 0
-        for sampleIndex in 0..<maxCount {
-            let ratio = Double(sampleIndex) / Double(maxCount - 1)
-            let targetMile = ratio * totalDistance
-
-            while lowerIndex + 1 < points.count, points[lowerIndex + 1].mile < targetMile {
-                lowerIndex += 1
-            }
-
-            if lowerIndex + 1 >= points.count {
-                if let last = points.last {
-                    sampled.append(
-                        RunPacePoint(
-                            mile: targetMile,
-                            paceSecPerMile: last.paceSecPerMile
-                        )
-                    )
-                }
-                continue
-            }
-
-            let lower = points[lowerIndex]
-            let upper = points[lowerIndex + 1]
-            let interpolated = interpolatePace(targetMile: targetMile, lower: lower, upper: upper)
-            sampled.append(
-                RunPacePoint(
-                    mile: targetMile,
-                    paceSecPerMile: interpolated
-                )
-            )
-        }
-
-        return sampled
-    }
-
-    private static func interpolatePace(targetMile: Double, lower: RunPacePoint, upper: RunPacePoint) -> Double {
-        let deltaMiles = upper.mile - lower.mile
-        if deltaMiles <= 0 {
-            return upper.paceSecPerMile
-        }
-        let ratio = ((targetMile - lower.mile) / deltaMiles).clamped(min: 0, max: 1)
-        return lower.paceSecPerMile + ((upper.paceSecPerMile - lower.paceSecPerMile) * ratio)
-    }
-
-    private static func buildBestSegments(from points: [RunDistanceTimePoint]) -> RunBestSegments? {
-        guard points.count >= 2 else { return nil }
-
-        let half = bestSegment(lengthMiles: 0.5, samples: points)
-        let mile = bestSegment(lengthMiles: 1.0, samples: points)
-        let twoMile = bestSegment(lengthMiles: 2.0, samples: points)
-
-        if half == nil, mile == nil, twoMile == nil {
-            return nil
-        }
-
-        return RunBestSegments(
-            halfMileBestSeconds: half?.durationSeconds,
-            mileBestSeconds: mile?.durationSeconds,
-            twoMileBestSeconds: twoMile?.durationSeconds,
-            halfMileStartMile: half?.startMile,
-            halfMileEndMile: half?.endMile,
-            mileStartMile: mile?.startMile,
-            mileEndMile: mile?.endMile,
-            twoMileStartMile: twoMile?.startMile,
-            twoMileEndMile: twoMile?.endMile
-        )
-    }
-
-    private static func bestSegment(
-        lengthMiles: Double,
-        samples: [RunDistanceTimePoint]
-    ) -> RunBestSegmentCandidate? {
-        guard lengthMiles > 0, samples.count >= 2 else { return nil }
-
-        var best: RunBestSegmentCandidate?
-        var endIndex = 1
-
-        for startIndex in 0..<(samples.count - 1) {
-            endIndex = max(endIndex, startIndex + 1)
-            let start = samples[startIndex]
-            let targetDistance = start.distanceMiles + lengthMiles
-
-            while endIndex < samples.count, samples[endIndex].distanceMiles < targetDistance {
-                endIndex += 1
-            }
-
-            if endIndex >= samples.count {
-                break
-            }
-
-            let lower = samples[max(startIndex, endIndex - 1)]
-            let upper = samples[endIndex]
-            let endTime = interpolateTime(
-                targetDistance: targetDistance,
-                lower: lower,
-                upper: upper
-            )
-            let duration = endTime - start.elapsedSeconds
-            if duration <= 0 {
-                continue
-            }
-
-            if let current = best {
-                if duration < current.durationSeconds {
-                    best = RunBestSegmentCandidate(
-                        durationSeconds: duration,
-                        startMile: start.distanceMiles,
-                        endMile: targetDistance
-                    )
-                }
-            } else {
-                best = RunBestSegmentCandidate(
-                    durationSeconds: duration,
-                    startMile: start.distanceMiles,
-                    endMile: targetDistance
-                )
-            }
-        }
-
-        return best
-    }
-
-    private static func interpolateTime(
-        targetDistance: Double,
-        lower: RunDistanceTimePoint,
-        upper: RunDistanceTimePoint
-    ) -> Double {
-        let deltaDistance = upper.distanceMiles - lower.distanceMiles
-        if deltaDistance <= 0 {
-            return upper.elapsedSeconds
-        }
-        let ratio = ((targetDistance - lower.distanceMiles) / deltaDistance).clamped(min: 0, max: 1)
-        return lower.elapsedSeconds + ((upper.elapsedSeconds - lower.elapsedSeconds) * ratio)
-    }
 }
 
 // MARK: - Persistence
@@ -1296,6 +1186,32 @@ final class TrainingStore: ObservableObject {
     @Published private(set) var lastSavedAt: Date = Date()
 
     private let persistence = PersistenceController()
+    private let metersToMiles = 0.000621371
+    private let milesToMeters = 1609.344
+    private let metersToFeet = 3.28084
+    private let manualPRDistanceToleranceMiles = 0.02
+
+    private struct RouteDistanceProfile {
+        let points: [CoordinatePoint]
+        let cumulativeMeters: [Double]
+
+        var totalMeters: Double {
+            cumulativeMeters.last ?? 0
+        }
+    }
+
+    private struct RouteDerivedMetrics {
+        let distanceMiles: Double
+        let elapsedSeconds: Int
+        let movingSeconds: Int
+        let splits: [RunSplit]
+        let elevationGainFeet: Double?
+        let elevationLossFeet: Double?
+        let minElevationFeet: Double?
+        let maxElevationFeet: Double?
+        let elevationSeries: [RunElevationPoint]
+        let targetSeconds: [RunningPRType: Int]
+    }
 
     init() {
         if var loaded = persistence.load() {
@@ -1377,13 +1293,6 @@ final class TrainingStore: ObservableObject {
         state.preferences = preferences
     }
 
-    func updateRunningGoals(_ goals: RunningGoals) {
-        state.runningGoals = RunningGoals(
-            weeklyMilesGoal: goals.weeklyMilesGoal,
-            goalEnabled: goals.goalEnabled && goals.weeklyMilesGoal > 0
-        )
-    }
-
     func signOutAndResetData() {
         let preservedTheme = state.theme
         let preservedPreferences = state.preferences
@@ -1435,6 +1344,13 @@ final class TrainingStore: ObservableObject {
         guard let active = state.activeSession else { return nil }
         let completedAt = Date()
         let finalizedRun = active.run.map { finalizeRunEntry($0) }
+        if let finalizedRun {
+            _ = updateRunningPRsIfNeeded(
+                for: finalizedRun,
+                sessionID: active.id,
+                achievedAt: completedAt
+            )
+        }
         let finished = WorkoutSession(
             id: active.id,
             name: active.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Workout" : active.name,
@@ -1579,10 +1495,23 @@ final class TrainingStore: ObservableObject {
         }
     }
 
-    func setRunEntry(_ run: RunEntry?) {
+    @discardableResult
+    func setRunEntry(_ run: RunEntry?) -> [RunningPRRecord] {
+        var newRunningPRs: [RunningPRRecord] = []
         withActiveSession { draft in
-            draft.run = run.map { finalizeRunEntry($0) }
+            guard let run else {
+                draft.run = nil
+                return
+            }
+            let finalized = finalizeRunEntry(run)
+            draft.run = finalized
+            newRunningPRs = updateRunningPRsIfNeeded(
+                for: finalized,
+                sessionID: draft.id,
+                achievedAt: Date()
+            )
         }
+        return newRunningPRs
     }
 
     func computeRunSplits(route: [CoordinatePoint]?, duration: Int, distanceMiles: Double) -> [RunSplit] {
@@ -1590,135 +1519,25 @@ final class TrainingStore: ObservableObject {
         let clampedDistance = max(0, distanceMiles)
         guard clampedDuration > 0, clampedDistance > 0 else { return [] }
 
-        if let route, route.count >= 2 {
-            let sorted = route.sorted { $0.timestamp < $1.timestamp }
-            guard let startTime = sorted.first?.timestamp else { return [] }
-
-            var splits: [RunSplit] = []
-            var cumulativeMiles: Double = 0
-            var nextMileMarker: Double = 1
-            var splitStartTime = startTime
-            var splitIndex = 1
-
-            for pairIndex in 1..<sorted.count {
-                let previousPoint = sorted[pairIndex - 1]
-                let currentPoint = sorted[pairIndex]
-                let segmentMeters = CLLocation(
-                    latitude: previousPoint.latitude,
-                    longitude: previousPoint.longitude
-                ).distance(from: CLLocation(latitude: currentPoint.latitude, longitude: currentPoint.longitude))
-                let segmentMiles = max(0, segmentMeters * 0.000621371)
-                guard segmentMiles > 0 else { continue }
-
-                let before = cumulativeMiles
-                cumulativeMiles += segmentMiles
-
-                while cumulativeMiles >= nextMileMarker, nextMileMarker <= clampedDistance {
-                    let mileNeeded = nextMileMarker - before
-                    let ratio = max(0, min(1, mileNeeded / segmentMiles))
-                    let segmentDuration = currentPoint.timestamp.timeIntervalSince(previousPoint.timestamp)
-                    let markerTime = previousPoint.timestamp.addingTimeInterval(segmentDuration * ratio)
-
-                    let splitDistance = nextMileMarker - Double(splitIndex - 1)
-                    let splitDuration = max(1, Int(markerTime.timeIntervalSince(splitStartTime).rounded()))
-                    let pace = Int((Double(splitDuration) / max(0.01, splitDistance)).rounded())
-
-                    splits.append(
-                        RunSplit(
-                            index: splitIndex,
-                            distanceMiles: splitDistance,
-                            durationSeconds: splitDuration,
-                            paceSecPerMile: pace
-                        )
-                    )
-
-                    splitStartTime = markerTime
-                    splitIndex += 1
-                    nextMileMarker = Double(splitIndex)
-                }
-            }
-
-            let consumedMiles = splits.reduce(0) { $0 + $1.distanceMiles }
-            let remainingDistance = max(0, clampedDistance - consumedMiles)
-            let consumedSeconds = splits.reduce(0) { $0 + $1.durationSeconds }
-            let remainingSeconds = max(0, clampedDuration - consumedSeconds)
-            if remainingDistance > 0.01 {
-                let durationForLast = max(1, remainingSeconds)
-                let pace = Int((Double(durationForLast) / remainingDistance).rounded())
-                splits.append(
-                    RunSplit(
-                        index: splitIndex,
-                        distanceMiles: remainingDistance,
-                        durationSeconds: durationForLast,
-                        paceSecPerMile: pace
-                    )
-                )
-            } else if splits.isEmpty {
-                let pace = Int((Double(clampedDuration) / clampedDistance).rounded())
-                splits = [
-                    RunSplit(
-                        index: 1,
-                        distanceMiles: clampedDistance,
-                        durationSeconds: clampedDuration,
-                        paceSecPerMile: pace
-                    )
-                ]
-            } else if let last = splits.indices.last, splits.reduce(0, { $0 + $1.durationSeconds }) < clampedDuration {
-                splits[last].durationSeconds += max(0, clampedDuration - splits.reduce(0) { $0 + $1.durationSeconds })
-                splits[last].paceSecPerMile = Int((Double(splits[last].durationSeconds) / max(0.01, splits[last].distanceMiles)).rounded())
-            }
-
-            return splits
+        if let route, let profile = makeRouteDistanceProfile(from: route) {
+            let profileMiles = profile.totalMeters * metersToMiles
+            let totalMiles = max(clampedDistance, profileMiles)
+            return computeFullMileSplits(from: profile, totalMiles: totalMiles)
         }
 
-        var splits: [RunSplit] = []
+        let fullMileCount = Int(floor(clampedDistance))
+        guard fullMileCount > 0 else { return [] }
         let averagePace = Double(clampedDuration) / clampedDistance
-        let fullMileCount = Int(clampedDistance)
-
-        if fullMileCount > 0 {
-            for mile in 1...fullMileCount {
-                let splitSeconds = max(1, Int(averagePace.rounded()))
-                splits.append(
-                    RunSplit(
-                        index: mile,
-                        distanceMiles: 1.0,
-                        durationSeconds: splitSeconds,
-                        paceSecPerMile: splitSeconds
-                    )
-                )
-            }
-        }
-
-        let partial = clampedDistance - Double(fullMileCount)
-        if partial > 0.01 {
-            let splitSeconds = max(1, Int((averagePace * partial).rounded()))
-            splits.append(
-                RunSplit(
-                    index: fullMileCount + 1,
-                    distanceMiles: partial,
-                    durationSeconds: splitSeconds,
-                    paceSecPerMile: Int((Double(splitSeconds) / partial).rounded())
-                )
+        return (1...fullMileCount).map { splitIndex in
+            let splitSeconds = max(1, Int(averagePace.rounded()))
+            return RunSplit(
+                splitIndex: splitIndex,
+                startMile: Double(splitIndex - 1),
+                endMile: Double(splitIndex),
+                splitSeconds: splitSeconds,
+                splitPaceSecPerMile: splitSeconds
             )
         }
-
-        if splits.isEmpty {
-            splits.append(
-                RunSplit(
-                    index: 1,
-                    distanceMiles: clampedDistance,
-                    durationSeconds: clampedDuration,
-                    paceSecPerMile: Int(averagePace.rounded())
-                )
-            )
-        }
-
-        let splitSum = splits.reduce(0) { $0 + $1.durationSeconds }
-        if splitSum != clampedDuration, let last = splits.indices.last {
-            splits[last].durationSeconds += (clampedDuration - splitSum)
-            splits[last].paceSecPerMile = Int((Double(splits[last].durationSeconds) / max(0.01, splits[last].distanceMiles)).rounded())
-        }
-        return splits
     }
 
     func detectAchievements(for session: WorkoutSession) -> [AchievementBadge] {
@@ -1957,16 +1776,6 @@ final class TrainingStore: ObservableObject {
         state.sessions.first(where: { $0.id == id })
     }
 
-    func ensureRunAnalyticsCached(for sessionID: UUID) {
-        guard let index = state.sessions.firstIndex(where: { $0.id == sessionID }) else { return }
-        guard var run = state.sessions[index].run else { return }
-        let snapshot = RunAnalytics.snapshot(for: run)
-        guard RunAnalytics.shouldBackfill(run: run, snapshot: snapshot) else { return }
-        run.paceSeries = snapshot.paceSeries
-        run.bestSegments = snapshot.bestSegments
-        state.sessions[index].run = run
-    }
-
     func previousSets(for exerciseName: String) -> [LoggedSet] {
         for session in sessionsNewestFirst {
             if let matched = session.exercises.first(where: {
@@ -2112,44 +1921,349 @@ final class TrainingStore: ObservableObject {
     private func finalizeRunEntry(_ run: RunEntry) -> RunEntry {
         var finalized = run
         finalized.distanceMiles = max(0, finalized.distanceMiles)
-        finalized.durationSeconds = max(0, finalized.durationSeconds)
+        finalized.elapsedSeconds = max(finalized.elapsedSeconds, finalized.durationSeconds)
+        finalized.durationSeconds = max(0, finalized.elapsedSeconds)
+        finalized.movingSeconds = max(0, finalized.movingSeconds)
 
-        if finalized.distanceMiles > 0, finalized.durationSeconds > 0 {
-            finalized.avgPaceSecPerMile = Int((Double(finalized.durationSeconds) / finalized.distanceMiles).rounded())
-        } else {
-            finalized.avgPaceSecPerMile = nil
-        }
-
-        if finalized.splits.isEmpty, finalized.distanceMiles > 0, finalized.durationSeconds > 0 {
-            finalized.splits = computeRunSplits(
-                route: finalized.route,
-                duration: finalized.durationSeconds,
-                distanceMiles: finalized.distanceMiles
+        if finalized.mode == .gps, let route = finalized.route, !route.isEmpty {
+            let derived = routeDerivedMetrics(
+                from: route,
+                fallbackElapsedSeconds: finalized.durationSeconds,
+                fallbackDistanceMiles: finalized.distanceMiles
             )
-        }
-
-        if finalized.mode == .gps {
-            let snapshot = RunAnalytics.snapshot(for: finalized)
-            finalized.paceSeries = snapshot.paceSeries
-            finalized.bestSegments = snapshot.bestSegments
+            finalized.distanceMiles = derived.distanceMiles
+            finalized.elapsedSeconds = derived.elapsedSeconds
+            finalized.durationSeconds = derived.elapsedSeconds
+            finalized.movingSeconds = max(0, min(derived.movingSeconds, derived.elapsedSeconds))
+            finalized.splits = derived.splits
+            finalized.elevationGainFeet = derived.elevationGainFeet
+            finalized.elevationLossFeet = derived.elevationLossFeet
+            finalized.minElevationFeet = derived.minElevationFeet
+            finalized.maxElevationFeet = derived.maxElevationFeet
+            finalized.elevationSeries = derived.elevationSeries
+            finalized.distanceSource = .gps
         } else {
-            finalized.paceSeries = []
-            finalized.bestSegments = nil
+            finalized.distanceMiles = max(0, finalized.distanceMiles)
+            finalized.elapsedSeconds = max(0, finalized.durationSeconds)
+            finalized.durationSeconds = finalized.elapsedSeconds
+            finalized.movingSeconds = finalized.elapsedSeconds
+            if finalized.mode == .gps {
+                finalized.distanceSource = (finalized.route?.isEmpty == false) ? .gps : .estimated
+            } else {
+                finalized.distanceSource = .manual
+                finalized.splits = []
+                finalized.elevationGainFeet = nil
+                finalized.elevationLossFeet = nil
+                finalized.minElevationFeet = nil
+                finalized.maxElevationFeet = nil
+                finalized.elevationSeries = []
+            }
         }
 
-        if finalized.mode == .gps {
-            finalized.distanceSource = (finalized.route?.isEmpty == false) ? .gps : .estimated
+        if finalized.distanceMiles > 0, finalized.elapsedSeconds > 0 {
+            finalized.avgPaceElapsedSecPerMile = Int((Double(finalized.elapsedSeconds) / finalized.distanceMiles).rounded())
         } else {
-            finalized.distanceSource = .manual
+            finalized.avgPaceElapsedSecPerMile = nil
         }
 
+        if finalized.distanceMiles > 0, finalized.movingSeconds > 0 {
+            finalized.avgPaceMovingSecPerMile = Int((Double(finalized.movingSeconds) / finalized.distanceMiles).rounded())
+        } else {
+            finalized.avgPaceMovingSecPerMile = nil
+        }
+
+        finalized.avgPaceSecPerMile = finalized.avgPaceElapsedSecPerMile
         return finalized
     }
 
-    private func fastestMilePace(from run: RunEntry) -> Int? {
-        if let segmentMile = run.bestSegments?.mileBestSeconds {
-            return Int(segmentMile.rounded())
+    private func makeRouteDistanceProfile(from route: [CoordinatePoint]) -> RouteDistanceProfile? {
+        let sorted = route.sorted { $0.timestamp < $1.timestamp }
+        guard sorted.count >= 2 else { return nil }
+
+        var cumulativeMeters = Array(repeating: 0.0, count: sorted.count)
+        for index in 1..<sorted.count {
+            let previous = sorted[index - 1]
+            let current = sorted[index]
+            let rawDistance = CLLocation(
+                latitude: previous.latitude,
+                longitude: previous.longitude
+            ).distance(
+                from: CLLocation(latitude: current.latitude, longitude: current.longitude)
+            )
+            let filteredDistance = (rawDistance.isFinite && rawDistance > 0.5 && rawDistance < 250) ? rawDistance : 0
+            cumulativeMeters[index] = cumulativeMeters[index - 1] + filteredDistance
         }
+
+        return RouteDistanceProfile(points: sorted, cumulativeMeters: cumulativeMeters)
+    }
+
+    private func routeDerivedMetrics(
+        from route: [CoordinatePoint],
+        fallbackElapsedSeconds: Int,
+        fallbackDistanceMiles: Double
+    ) -> RouteDerivedMetrics {
+        guard let profile = makeRouteDistanceProfile(from: route) else {
+            let clampedElapsed = max(0, fallbackElapsedSeconds)
+            return RouteDerivedMetrics(
+                distanceMiles: max(0, fallbackDistanceMiles),
+                elapsedSeconds: clampedElapsed,
+                movingSeconds: clampedElapsed,
+                splits: [],
+                elevationGainFeet: nil,
+                elevationLossFeet: nil,
+                minElevationFeet: nil,
+                maxElevationFeet: nil,
+                elevationSeries: [],
+                targetSeconds: [:]
+            )
+        }
+
+        let routeElapsedSeconds = max(
+            0,
+            Int((profile.points.last?.timestamp.timeIntervalSince(profile.points.first?.timestamp ?? Date()) ?? 0).rounded())
+        )
+        let elapsedSeconds = max(max(0, fallbackElapsedSeconds), routeElapsedSeconds)
+        let movingSeconds = min(elapsedSeconds, movingSeconds(from: profile))
+        let profileDistanceMiles = profile.totalMeters * metersToMiles
+        let distanceMiles = profileDistanceMiles > 0 ? profileDistanceMiles : max(0, fallbackDistanceMiles)
+        let splits = computeFullMileSplits(from: profile, totalMiles: distanceMiles)
+        let elevation = computeElevationMetrics(from: profile)
+
+        var targetSeconds: [RunningPRType: Int] = [:]
+        for prType in RunningPRType.allCases {
+            if let seconds = interpolateElapsedSeconds(atMiles: prType.targetMiles, profile: profile) {
+                targetSeconds[prType] = seconds
+            }
+        }
+
+        return RouteDerivedMetrics(
+            distanceMiles: distanceMiles,
+            elapsedSeconds: elapsedSeconds,
+            movingSeconds: movingSeconds,
+            splits: splits,
+            elevationGainFeet: elevation.gainFeet,
+            elevationLossFeet: elevation.lossFeet,
+            minElevationFeet: elevation.minFeet,
+            maxElevationFeet: elevation.maxFeet,
+            elevationSeries: elevation.series,
+            targetSeconds: targetSeconds
+        )
+    }
+
+    private func movingSeconds(from profile: RouteDistanceProfile) -> Int {
+        var movingTime: TimeInterval = 0
+        for index in 1..<profile.points.count {
+            let previous = profile.points[index - 1]
+            let current = profile.points[index]
+            let deltaSeconds = current.timestamp.timeIntervalSince(previous.timestamp)
+            guard deltaSeconds > 0 else { continue }
+
+            let accuracyOK = previous.horizontalAccuracy <= 50 && current.horizontalAccuracy <= 50
+            guard accuracyOK else { continue }
+
+            let distanceDelta = profile.cumulativeMeters[index] - profile.cumulativeMeters[index - 1]
+            let resolvedSpeed: Double
+            if let speed = current.speedMetersPerSecond, speed >= 0 {
+                resolvedSpeed = speed
+            } else {
+                resolvedSpeed = distanceDelta / deltaSeconds
+            }
+
+            if resolvedSpeed >= 0.8 || distanceDelta >= 2 {
+                movingTime += deltaSeconds
+            }
+        }
+        return max(0, Int(movingTime.rounded()))
+    }
+
+    private func computeFullMileSplits(from profile: RouteDistanceProfile, totalMiles: Double) -> [RunSplit] {
+        guard let startTime = profile.points.first?.timestamp else { return [] }
+        let fullMiles = Int(floor(max(0, totalMiles) + 1e-9))
+        guard fullMiles > 0 else { return [] }
+
+        var splits: [RunSplit] = []
+        var splitStartTime = startTime
+
+        for splitIndex in 1...fullMiles {
+            guard let boundaryTime = interpolateTimestamp(atMiles: Double(splitIndex), profile: profile) else { break }
+            let splitSeconds = max(1, Int(boundaryTime.timeIntervalSince(splitStartTime).rounded()))
+            splits.append(
+                RunSplit(
+                    splitIndex: splitIndex,
+                    startMile: Double(splitIndex - 1),
+                    endMile: Double(splitIndex),
+                    splitSeconds: splitSeconds,
+                    splitPaceSecPerMile: splitSeconds
+                )
+            )
+            splitStartTime = boundaryTime
+        }
+        return splits
+    }
+
+    private func interpolateTimestamp(atMiles targetMiles: Double, profile: RouteDistanceProfile) -> Date? {
+        guard targetMiles >= 0 else { return nil }
+        let targetMeters = targetMiles * milesToMeters
+        guard targetMeters <= profile.totalMeters + 0.0001 else { return nil }
+        if targetMeters <= 0 {
+            return profile.points.first?.timestamp
+        }
+
+        for index in 1..<profile.cumulativeMeters.count {
+            let previousDistance = profile.cumulativeMeters[index - 1]
+            let currentDistance = profile.cumulativeMeters[index]
+            guard currentDistance + 0.0001 >= targetMeters else { continue }
+
+            let previousTime = profile.points[index - 1].timestamp
+            let currentTime = profile.points[index].timestamp
+            let segmentDistance = currentDistance - previousDistance
+            guard segmentDistance > 0 else { return currentTime }
+
+            let ratio = max(0, min(1, (targetMeters - previousDistance) / segmentDistance))
+            let segmentSeconds = currentTime.timeIntervalSince(previousTime)
+            return previousTime.addingTimeInterval(segmentSeconds * ratio)
+        }
+
+        return profile.points.last?.timestamp
+    }
+
+    private func interpolateElapsedSeconds(atMiles targetMiles: Double, profile: RouteDistanceProfile) -> Int? {
+        guard
+            let start = profile.points.first?.timestamp,
+            let boundary = interpolateTimestamp(atMiles: targetMiles, profile: profile)
+        else {
+            return nil
+        }
+        return max(1, Int(boundary.timeIntervalSince(start).rounded()))
+    }
+
+    private func computeElevationMetrics(
+        from profile: RouteDistanceProfile
+    ) -> (gainFeet: Double?, lossFeet: Double?, minFeet: Double?, maxFeet: Double?, series: [RunElevationPoint]) {
+        var altitudeSamples: [(routeIndex: Int, altitudeMeters: Double)] = []
+        altitudeSamples.reserveCapacity(profile.points.count)
+
+        for (index, point) in profile.points.enumerated() {
+            guard point.horizontalAccuracy <= 50 else { continue }
+            guard let altitude = point.altitudeMeters, altitude.isFinite else { continue }
+            altitudeSamples.append((routeIndex: index, altitudeMeters: altitude))
+        }
+
+        guard !altitudeSamples.isEmpty else {
+            return (nil, nil, nil, nil, [])
+        }
+
+        let smoothedMeters = movingAverage(values: altitudeSamples.map(\.altitudeMeters), window: 5)
+        var gainMeters: Double = 0
+        var lossMeters: Double = 0
+        if smoothedMeters.count >= 2 {
+            for index in 1..<smoothedMeters.count {
+                let delta = smoothedMeters[index] - smoothedMeters[index - 1]
+                if delta > 0 {
+                    gainMeters += delta
+                } else {
+                    lossMeters += abs(delta)
+                }
+            }
+        }
+
+        let minFeet = smoothedMeters.min().map { $0 * metersToFeet }
+        let maxFeet = smoothedMeters.max().map { $0 * metersToFeet }
+        let rawSeries = zip(altitudeSamples, smoothedMeters).map { sample, smoothedAltitude in
+            RunElevationPoint(
+                mile: profile.cumulativeMeters[sample.routeIndex] * metersToMiles,
+                elevationFeet: smoothedAltitude * metersToFeet
+            )
+        }
+
+        return (
+            gainFeet: gainMeters * metersToFeet,
+            lossFeet: lossMeters * metersToFeet,
+            minFeet: minFeet,
+            maxFeet: maxFeet,
+            series: downsampleElevationSeries(rawSeries, maxCount: 300)
+        )
+    }
+
+    private func movingAverage(values: [Double], window: Int) -> [Double] {
+        guard !values.isEmpty else { return [] }
+        guard window > 1 else { return values }
+        let radius = max(1, window / 2)
+
+        return values.indices.map { index in
+            let start = max(0, index - radius)
+            let end = min(values.count - 1, index + radius)
+            let slice = values[start...end]
+            let total = slice.reduce(0, +)
+            return total / Double(slice.count)
+        }
+    }
+
+    private func downsampleElevationSeries(_ series: [RunElevationPoint], maxCount: Int) -> [RunElevationPoint] {
+        guard series.count > maxCount, maxCount > 1 else { return series }
+
+        let step = Double(series.count - 1) / Double(maxCount - 1)
+        var indices: [Int] = []
+        indices.reserveCapacity(maxCount)
+
+        for sampleIndex in 0..<maxCount {
+            let raw = Int((Double(sampleIndex) * step).rounded())
+            let bounded = min(series.count - 1, max(0, raw))
+            if indices.last != bounded {
+                indices.append(bounded)
+            }
+        }
+
+        if indices.last != series.count - 1 {
+            indices.append(series.count - 1)
+        }
+
+        return indices.map { series[$0] }
+    }
+
+    private func updateRunningPRsIfNeeded(
+        for run: RunEntry,
+        sessionID: UUID,
+        achievedAt: Date
+    ) -> [RunningPRRecord] {
+        var newlySet: [RunningPRRecord] = []
+
+        for prType in RunningPRType.allCases {
+            guard let candidateSeconds = candidatePRSeconds(for: prType, run: run) else { continue }
+            if let existing = state.runningPRs[prType], candidateSeconds >= existing.bestSeconds {
+                continue
+            }
+
+            let record = RunningPRRecord(
+                type: prType,
+                bestSeconds: candidateSeconds,
+                achievedAt: achievedAt,
+                sessionId: sessionID
+            )
+            state.runningPRs[prType] = record
+            newlySet.append(record)
+        }
+
+        return newlySet.sorted { $0.type.targetMiles < $1.type.targetMiles }
+    }
+
+    private func candidatePRSeconds(for prType: RunningPRType, run: RunEntry) -> Int? {
+        let targetMiles = prType.targetMiles
+        guard run.distanceMiles + 0.0001 >= targetMiles else { return nil }
+
+        if run.mode == .gps, let route = run.route, let profile = makeRouteDistanceProfile(from: route) {
+            return interpolateElapsedSeconds(atMiles: targetMiles, profile: profile)
+        }
+
+        guard run.mode == .manual else { return nil }
+        let elapsed = max(0, run.elapsedSeconds)
+        guard elapsed > 0 else { return nil }
+        guard abs(run.distanceMiles - targetMiles) <= manualPRDistanceToleranceMiles else { return nil }
+        let scaled = Double(elapsed) * (targetMiles / max(run.distanceMiles, 0.0001))
+        return max(1, Int(scaled.rounded()))
+    }
+
+    private func fastestMilePace(from run: RunEntry) -> Int? {
         let fullMileSplits = run.splits.filter { $0.distanceMiles >= 0.99 }
         if let minSplitPace = fullMileSplits.map(\.paceSecPerMile).min() {
             return minSplitPace
@@ -2294,8 +2408,9 @@ final class GPSRunTracker: NSObject, ObservableObject, CLLocationManagerDelegate
                 latitude: location.coordinate.latitude,
                 longitude: location.coordinate.longitude,
                 timestamp: location.timestamp,
-                altitudeMeters: location.altitude,
-                horizontalAccuracy: location.horizontalAccuracy
+                altitudeMeters: location.verticalAccuracy >= 0 ? location.altitude : nil,
+                horizontalAccuracy: location.horizontalAccuracy,
+                speedMetersPerSecond: location.speed >= 0 ? location.speed : nil
             )
             DispatchQueue.main.async {
                 self.route.append(point)
@@ -2719,771 +2834,6 @@ struct WorkoutView: View {
             StatTile(title: "Run", value: "\(String(format: "%.1f", store.totalRunDistanceMiles)) mi")
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-// MARK: - Insights (RUN-INSIGHTS-I1)
-// Changes:
-// - RUN-INSIGHTS-I1: Added top segmented selector for Running vs Lifting insights.
-// - RUN-INSIGHTS-I2: Preserved and restored lifting-oriented insight cards (week/trends/consistency).
-// - RUN-INSIGHTS-I3: Added running streaks + heatmap + weekly goal management.
-private struct RunningStreakMetrics {
-    var currentStreakDays: Int
-    var longestStreakDays: Int
-    var runsLast7Days: Int
-    var runsLast30Days: Int
-    var milesLast7Days: Double
-    var milesLast30Days: Double
-}
-
-struct InsightsView: View {
-    @EnvironmentObject private var store: TrainingStore
-
-    private enum InsightSection: String, CaseIterable, Identifiable {
-        case running = "Running"
-        case lifting = "Lifting"
-
-        var id: String { rawValue }
-    }
-
-    private static let loadFormatter: NumberFormatter = {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = 0
-        return formatter
-    }()
-
-    @State private var selectedSection: InsightSection = .running
-    @State private var showGoalEditor = false
-    @State private var selectedHeatmapDay: Date?
-    @State private var showHeatmapDaySheet = false
-
-    private let runDayThresholdMiles = 0.1
-    private var calendar: Calendar { Calendar.current }
-
-    private var runningSessions: [WorkoutSession] {
-        store.state.sessions
-            .filter { ($0.run?.distanceMiles ?? 0) > 0 }
-            .sorted { $0.completedAt < $1.completedAt }
-    }
-
-    private var liftingSessions: [WorkoutSession] {
-        store.state.sessions
-            .filter { $0.liftingLoad > 0 }
-            .sorted { $0.completedAt < $1.completedAt }
-    }
-
-    private var hasLiftingData: Bool {
-        !liftingSessions.isEmpty
-    }
-
-    private var loadCalculator: TrainingLoadCalculator {
-        TrainingLoadCalculator(
-            sessions: store.state.sessions,
-            calendar: .current,
-            weekStartsOnMonday: store.state.preferences.weekStartsOnMonday
-        )
-    }
-
-    private var thisWeekLoad: WeeklyTrainingLoad {
-        loadCalculator.weeklyLoad(for: Date())
-    }
-
-    private var lastWeekLoad: WeeklyTrainingLoad {
-        let previousWeekReferenceDate = Calendar.current.date(
-            byAdding: .day,
-            value: -7,
-            to: thisWeekLoad.weekStart
-        ) ?? Date()
-        return loadCalculator.weeklyLoad(for: previousWeekReferenceDate)
-    }
-
-    private var liftingWeekDeltaPercent: Double? {
-        loadCalculator.weekOverWeekDeltaPercent(
-            thisWeek: thisWeekLoad.liftingLoad,
-            lastWeek: lastWeekLoad.liftingLoad
-        )
-    }
-
-    private var thisWeekLiftingSessions: [WorkoutSession] {
-        loadCalculator
-            .sessions(inWeekContaining: Date())
-            .filter { $0.liftingLoad > 0 }
-    }
-
-    private var thisWeekCompletedSets: Int {
-        thisWeekLiftingSessions.reduce(0) { partial, session in
-            partial + session.exercises.reduce(0) { exerciseTotal, exercise in
-                exerciseTotal + exercise.sets.filter(\.isCompleted).count
-            }
-        }
-    }
-
-    private var liftingSessionsLast7Days: [WorkoutSession] {
-        let today = calendar.startOfDay(for: Date())
-        let last7Start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
-        return liftingSessions.filter { session in
-            let day = calendar.startOfDay(for: session.completedAt)
-            return day >= last7Start && day <= today
-        }
-    }
-
-    private var liftingSessionsLast30Days: [WorkoutSession] {
-        let today = calendar.startOfDay(for: Date())
-        let last30Start = calendar.date(byAdding: .day, value: -29, to: today) ?? today
-        return liftingSessions.filter { session in
-            let day = calendar.startOfDay(for: session.completedAt)
-            return day >= last30Start && day <= today
-        }
-    }
-
-    private var liftingLoadLast30Days: Double {
-        liftingSessionsLast30Days.reduce(0) { $0 + $1.liftingLoad }
-    }
-
-    private var averageLiftingLoadPerSession30Days: Double? {
-        guard !liftingSessionsLast30Days.isEmpty else { return nil }
-        return liftingLoadLast30Days / Double(liftingSessionsLast30Days.count)
-    }
-
-    private var bestLiftingDayLast30Days: (date: Date, load: Double)? {
-        var dayLoads: [Date: Double] = [:]
-        for session in liftingSessionsLast30Days {
-            let day = calendar.startOfDay(for: session.completedAt)
-            dayLoads[day, default: 0] += session.liftingLoad
-        }
-        guard let best = dayLoads.max(by: { $0.value < $1.value }) else { return nil }
-        return (best.key, best.value)
-    }
-
-    private var mostCommonLiftingDay: String {
-        guard !liftingSessions.isEmpty else { return "—" }
-        var counts: [Int: Int] = [:]
-        for session in liftingSessions {
-            let weekday = calendar.component(.weekday, from: session.completedAt)
-            counts[weekday, default: 0] += 1
-        }
-        guard let top = counts.max(by: { $0.value < $1.value })?.key else { return "—" }
-        let symbols = calendar.weekdaySymbols
-        let index = max(0, min(symbols.count - 1, top - 1))
-        return symbols[index]
-    }
-
-    private var liftingSessionsThisMonthCount: Int {
-        let now = Date()
-        return liftingSessions.filter { session in
-            calendar.isDate(session.completedAt, equalTo: now, toGranularity: .month)
-        }.count
-    }
-
-    private var runningSessionsByDay: [Date: [WorkoutSession]] {
-        Dictionary(grouping: runningSessions) { session in
-            calendar.startOfDay(for: session.completedAt)
-        }
-    }
-
-    private var dailyMiles: [Date: Double] {
-        var buckets: [Date: Double] = [:]
-        for session in runningSessions {
-            let day = calendar.startOfDay(for: session.completedAt)
-            buckets[day, default: 0] += max(0, session.run?.distanceMiles ?? 0)
-        }
-        return buckets
-    }
-
-    private var heatmapMaxMiles: Double {
-        max(0, dailyMiles.values.max() ?? 0)
-    }
-
-    private var heatmapWeeks: [[Date]] {
-        let today = calendar.startOfDay(for: Date())
-        let start = calendar.date(byAdding: .month, value: -12, to: today) ?? today
-        let firstWeek = calendar.startOfWeek(for: calendar.startOfDay(for: start))
-        let lastWeek = calendar.startOfWeek(for: today)
-
-        var weeks: [[Date]] = []
-        var cursor = firstWeek
-        while cursor <= lastWeek {
-            var week: [Date] = []
-            for offset in 0..<7 {
-                if let day = calendar.date(byAdding: .day, value: offset, to: cursor) {
-                    week.append(calendar.startOfDay(for: day))
-                }
-            }
-            weeks.append(week)
-            cursor = calendar.date(byAdding: .weekOfYear, value: 1, to: cursor) ?? cursor
-            if weeks.count > 80 {
-                break
-            }
-        }
-        return weeks
-    }
-
-    private var weekdaySymbols: [String] {
-        let base = calendar.shortStandaloneWeekdaySymbols
-        let pivot = max(0, min(base.count - 1, calendar.firstWeekday - 1))
-        return Array(base[pivot...]) + Array(base[..<pivot])
-    }
-
-    private var streakMetrics: RunningStreakMetrics {
-        let today = calendar.startOfDay(for: Date())
-        let activeRunDays = Set(
-            dailyMiles
-                .filter { $0.value >= runDayThresholdMiles }
-                .map(\.key)
-        )
-
-        var currentStreak = 0
-        var cursor = today
-        while activeRunDays.contains(cursor) {
-            currentStreak += 1
-            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
-            cursor = previous
-        }
-
-        let sortedRunDays = activeRunDays.sorted()
-        var longestStreak = 0
-        var streak = 0
-        var previous: Date?
-        for day in sortedRunDays {
-            if let previous, let dayGap = calendar.dateComponents([.day], from: previous, to: day).day, dayGap == 1 {
-                streak += 1
-            } else {
-                streak = 1
-            }
-            longestStreak = max(longestStreak, streak)
-            previous = day
-        }
-
-        let last7Start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
-        let last30Start = calendar.date(byAdding: .day, value: -29, to: today) ?? today
-
-        var runs7 = 0
-        var runs30 = 0
-        var miles7 = 0.0
-        var miles30 = 0.0
-        for session in runningSessions {
-            let miles = max(0, session.run?.distanceMiles ?? 0)
-            if miles <= 0 { continue }
-            let day = calendar.startOfDay(for: session.completedAt)
-            if day >= last7Start && day <= today {
-                runs7 += 1
-                miles7 += miles
-            }
-            if day >= last30Start && day <= today {
-                runs30 += 1
-                miles30 += miles
-            }
-        }
-
-        return RunningStreakMetrics(
-            currentStreakDays: currentStreak,
-            longestStreakDays: longestStreak,
-            runsLast7Days: runs7,
-            runsLast30Days: runs30,
-            milesLast7Days: miles7,
-            milesLast30Days: miles30
-        )
-    }
-
-    private var thisWeekMiles: Double {
-        guard let interval = calendar.dateInterval(of: .weekOfYear, for: Date()) else { return 0 }
-        return runningSessions.reduce(0) { partial, session in
-            guard interval.contains(session.completedAt) else { return partial }
-            return partial + max(0, session.run?.distanceMiles ?? 0)
-        }
-    }
-
-    private var weeklyGoal: RunningGoals {
-        store.state.runningGoals
-    }
-
-    private var weeklyGoalProgress: Double {
-        guard weeklyGoal.goalEnabled, weeklyGoal.weeklyMilesGoal > 0 else { return 0 }
-        return min(1, thisWeekMiles / weeklyGoal.weeklyMilesGoal)
-    }
-
-    private var weeklyGoalPercentText: String {
-        guard weeklyGoal.goalEnabled, weeklyGoal.weeklyMilesGoal > 0 else { return "0%" }
-        let percentage = Int(((thisWeekMiles / weeklyGoal.weeklyMilesGoal) * 100).rounded())
-        return "\(max(0, percentage))%"
-    }
-
-    private var selectedDayRuns: [WorkoutSession] {
-        guard let selectedHeatmapDay else { return [] }
-        return (runningSessionsByDay[selectedHeatmapDay] ?? []).sorted { $0.completedAt < $1.completedAt }
-    }
-
-    private var selectedDayMiles: Double {
-        guard let selectedHeatmapDay else { return 0 }
-        return max(0, dailyMiles[selectedHeatmapDay] ?? 0)
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Picker("Insights", selection: $selectedSection) {
-                    ForEach(InsightSection.allCases) { section in
-                        Text(section.rawValue).tag(section)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                switch selectedSection {
-                case .running:
-                    runningInsightsContent
-                case .lifting:
-                    liftingInsightsContent
-                }
-            }
-            .padding()
-        }
-        .navigationTitle("Insights")
-        .sheet(isPresented: $showGoalEditor) {
-            WeeklyMileageGoalSheet(goals: weeklyGoal) { goals in
-                store.updateRunningGoals(goals)
-            }
-        }
-        .sheet(isPresented: $showHeatmapDaySheet) {
-            heatmapDaySheet
-        }
-    }
-
-    @ViewBuilder
-    private var runningInsightsContent: some View {
-        if runningSessions.isEmpty {
-            runningEmptyStateCard
-        }
-        streaksCard
-        weeklyGoalCard
-        runningHeatmapCard
-    }
-
-    @ViewBuilder
-    private var liftingInsightsContent: some View {
-        if !hasLiftingData {
-            liftingEmptyStateCard
-        }
-        liftingThisWeekCard
-        liftingTrendsCard
-        liftingConsistencyCard
-    }
-
-    private var runningEmptyStateCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("No runs yet")
-                .font(.headline)
-            Text("Log a manual or GPS run to unlock running insights.")
-                .foregroundStyle(.secondary)
-            Button {
-                NotificationCenter.default.post(name: .navigateToWorkoutTab, object: nil)
-            } label: {
-                Text("Start Session")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .glassCard()
-    }
-
-    private var liftingEmptyStateCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("No lifting data yet")
-                .font(.headline)
-            Text("Complete lifting sets in a session to unlock lifting insights.")
-                .foregroundStyle(.secondary)
-            Button {
-                NotificationCenter.default.post(name: .navigateToWorkoutTab, object: nil)
-            } label: {
-                Text("Start Session")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .glassCard()
-    }
-
-    private var liftingThisWeekCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("This Week")
-                .font(.headline)
-
-            HStack(alignment: .firstTextBaseline) {
-                Text("Lifting Load")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text(formatLoad(thisWeekLoad.liftingLoad))
-                    .font(.system(size: 34, weight: .bold, design: .rounded).monospacedDigit())
-            }
-
-            Divider()
-
-            insightMetricRow(title: "Sessions", value: "\(thisWeekLiftingSessions.count)")
-            insightMetricRow(title: "Completed sets", value: "\(thisWeekCompletedSets)")
-            insightMetricRow(
-                title: "Δ vs last week",
-                value: formattedDeltaText(liftingWeekDeltaPercent),
-                valueColor: deltaColor(liftingWeekDeltaPercent)
-            )
-        }
-        .glassCard()
-    }
-
-    private var liftingTrendsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Trends")
-                .font(.headline)
-
-            insightMetricRow(
-                title: "Load (30 days)",
-                value: formatLoad(liftingLoadLast30Days)
-            )
-            insightMetricRow(
-                title: "Avg / session",
-                value: averageLiftingLoadPerSession30Days.map(formatLoad) ?? "—"
-            )
-            insightMetricRow(
-                title: "Best day",
-                value: bestLiftingDayLast30Days.map {
-                    "\($0.date.formatted(date: .abbreviated, time: .omitted)) (\(formatLoad($0.load)))"
-                } ?? "—"
-            )
-        }
-        .glassCard()
-    }
-
-    private var liftingConsistencyCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Consistency")
-                .font(.headline)
-
-            insightMetricRow(title: "Sessions (7 days)", value: "\(liftingSessionsLast7Days.count)")
-            insightMetricRow(title: "Most common day", value: mostCommonLiftingDay)
-            insightMetricRow(title: "This month", value: "\(liftingSessionsThisMonthCount)")
-        }
-        .glassCard()
-    }
-
-    private var streaksCard: some View {
-        let metrics = streakMetrics
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Streaks")
-                .font(.headline)
-
-            HStack(spacing: 10) {
-                streakTile(title: "Current", value: "\(metrics.currentStreakDays) d")
-                streakTile(title: "Longest", value: "\(metrics.longestStreakDays) d")
-            }
-
-            Divider()
-
-            insightMetricRow(title: "Runs (7 days)", value: "\(metrics.runsLast7Days)")
-            insightMetricRow(title: "Runs (30 days)", value: "\(metrics.runsLast30Days)")
-            insightMetricRow(title: "Miles (7 days)", value: "\(String(format: "%.1f", metrics.milesLast7Days)) mi")
-            insightMetricRow(title: "Miles (30 days)", value: "\(String(format: "%.1f", metrics.milesLast30Days)) mi")
-        }
-        .glassCard()
-    }
-
-    private var weeklyGoalCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Weekly Goal")
-                .font(.headline)
-
-            if weeklyGoal.goalEnabled, weeklyGoal.weeklyMilesGoal > 0 {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("\(thisWeekMiles, specifier: "%.1f") / \(weeklyGoal.weeklyMilesGoal, specifier: "%.1f") mi")
-                        .font(.title3.weight(.semibold).monospacedDigit())
-                    Spacer()
-                    Text(weeklyGoalPercentText)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-
-                GeometryReader { proxy in
-                    let width = max(0, proxy.size.width * weeklyGoalProgress)
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.white.opacity(0.12))
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.appAccent.gradient)
-                            .frame(width: width)
-                    }
-                }
-                .frame(height: 14)
-
-                Button("Edit Goal") {
-                    showGoalEditor = true
-                }
-                .buttonStyle(.bordered)
-            } else {
-                Text("Set a weekly mileage goal to track your progress.")
-                    .foregroundStyle(.secondary)
-                Button("Set a weekly mileage goal") {
-                    showGoalEditor = true
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .glassCard()
-    }
-
-    private var runningHeatmapCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Running Heatmap")
-                .font(.headline)
-            Text("Last 12 months")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 6) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(weekdaySymbols, id: \.self) { symbol in
-                            Text(String(symbol.prefix(1)))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .frame(height: 12)
-                        }
-                    }
-
-                    HStack(alignment: .top, spacing: 4) {
-                        ForEach(Array(heatmapWeeks.enumerated()), id: \.offset) { _, week in
-                            VStack(spacing: 4) {
-                                ForEach(week, id: \.self) { day in
-                                    heatmapDayCell(day)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            heatmapLegend
-        }
-        .glassCard()
-    }
-
-    private var heatmapLegend: some View {
-        HStack(spacing: 6) {
-            Text("0")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            legendSquare(level: 0)
-            legendSquare(level: 1)
-            legendSquare(level: 2)
-            legendSquare(level: 3)
-            Text("High")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func streakTile(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.headline.monospacedDigit())
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func insightMetricRow(title: String, value: String, valueColor: Color = .primary) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(valueColor)
-        }
-    }
-
-    private func heatmapDayCell(_ day: Date) -> some View {
-        Button {
-            selectedHeatmapDay = day
-            showHeatmapDaySheet = true
-        } label: {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(heatmapColor(for: day))
-                .frame(width: 12, height: 12)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
-                )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(day.formatted(date: .abbreviated, time: .omitted))")
-    }
-
-    private func legendSquare(level: Int) -> some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(heatmapColor(forLevel: level))
-            .frame(width: 12, height: 12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
-            )
-    }
-
-    private func heatmapColor(for day: Date) -> Color {
-        let miles = max(0, dailyMiles[day] ?? 0)
-        if miles <= 0 {
-            return heatmapColor(forLevel: 0)
-        }
-        if heatmapMaxMiles <= 0 {
-            return heatmapColor(forLevel: 1)
-        }
-        let normalized = miles / heatmapMaxMiles
-        if normalized < 0.34 {
-            return heatmapColor(forLevel: 1)
-        }
-        if normalized < 0.67 {
-            return heatmapColor(forLevel: 2)
-        }
-        return heatmapColor(forLevel: 3)
-    }
-
-    private func heatmapColor(forLevel level: Int) -> Color {
-        switch level {
-        case 1:
-            return Color.appAccent.opacity(0.35)
-        case 2:
-            return Color.appAccent.opacity(0.62)
-        case 3:
-            return Color.appAccent.opacity(0.88)
-        default:
-            return Color.secondary.opacity(0.18)
-        }
-    }
-
-    private var heatmapDaySheet: some View {
-        NavigationStack {
-            List {
-                Section("Summary") {
-                    Text(selectedHeatmapDay?.formatted(date: .complete, time: .omitted) ?? "")
-                    Text("Total: \(selectedDayMiles, specifier: "%.2f") mi")
-                }
-
-                Section("Runs") {
-                    if selectedDayRuns.isEmpty {
-                        Text("No runs recorded.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(selectedDayRuns) { session in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(session.name)
-                                    .font(.subheadline.weight(.semibold))
-                                let miles = max(0, session.run?.distanceMiles ?? 0)
-                                let duration = max(0, session.run?.durationSeconds ?? 0)
-                                Text("\(miles, specifier: "%.2f") mi • \(formatDuration(duration))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 2)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Day Detail")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        showHeatmapDaySheet = false
-                    }
-                }
-            }
-        }
-    }
-
-    private func formattedDeltaText(_ delta: Double?) -> String {
-        guard let delta else { return "—" }
-        let roundedMagnitude = Int(abs(delta).rounded())
-        if delta > 0 {
-            return "↑ \(roundedMagnitude)%"
-        }
-        if delta < 0 {
-            return "↓ \(roundedMagnitude)%"
-        }
-        return "0%"
-    }
-
-    private func deltaColor(_ delta: Double?) -> Color {
-        guard let delta else { return .secondary }
-        if delta > 0 { return .accentColor }
-        if delta < 0 { return .red }
-        return .secondary
-    }
-
-    private func formatLoad(_ value: Double) -> String {
-        let roundedValue = Int(value.rounded())
-        return Self.loadFormatter.string(from: NSNumber(value: roundedValue)) ?? "\(roundedValue)"
-    }
-}
-
-struct WeeklyMileageGoalSheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    let goals: RunningGoals
-    var onSave: (RunningGoals) -> Void
-
-    @State private var goalEnabled: Bool
-    @State private var weeklyMilesGoal: Double
-
-    init(goals: RunningGoals, onSave: @escaping (RunningGoals) -> Void) {
-        self.goals = goals
-        self.onSave = onSave
-        _goalEnabled = State(initialValue: goals.goalEnabled)
-        _weeklyMilesGoal = State(initialValue: max(0, goals.weeklyMilesGoal))
-    }
-
-    private var canSave: Bool {
-        !goalEnabled || weeklyMilesGoal > 0
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Goal") {
-                    Toggle("Enable weekly goal", isOn: $goalEnabled)
-
-                    Stepper(value: $weeklyMilesGoal, in: 0...250, step: 0.5) {
-                        HStack {
-                            Text("Weekly miles")
-                            Spacer()
-                            Text("\(weeklyMilesGoal, specifier: "%.1f") mi")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .disabled(!goalEnabled)
-                }
-            }
-            .navigationTitle("Weekly Goal")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
-                        let updated = RunningGoals(
-                            weeklyMilesGoal: weeklyMilesGoal,
-                            goalEnabled: goalEnabled
-                        )
-                        onSave(updated)
-                        dismiss()
-                    }
-                    .disabled(!canSave)
-                }
-            }
-        }
     }
 }
 
@@ -4686,7 +4036,7 @@ struct RunEntryEditorView: View {
     let preferredMode: RunMode
     @ObservedObject var tracker: GPSRunTracker
     var onMinimizeGPS: () -> Void
-    let onSave: (RunEntry) -> Void
+    let onSave: (RunEntry) -> [RunningPRRecord]
 
     @State private var manualDistanceInput = ""
     @State private var manualPaceInput = ""
@@ -4701,6 +4051,9 @@ struct RunEntryEditorView: View {
     @State private var showLiveRoutePreview = false
     @State private var gpsSummaryNotesExpanded = false
     @State private var suppressManualRecalc = false
+    @State private var showNewPRAnnouncement = false
+    @State private var announcedPRTypes: [RunningPRType] = []
+    @State private var dismissAfterPRTask: Task<Void, Never>?
 
     private enum ManualInputField {
         case distance
@@ -4792,6 +4145,17 @@ struct RunEntryEditorView: View {
                 return
             }
             recalculateManual(from: .time)
+        }
+        .overlay(alignment: .top) {
+            if showNewPRAnnouncement {
+                newPRAnnouncementView
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .onDisappear {
+            dismissAfterPRTask?.cancel()
         }
     }
 
@@ -5188,6 +4552,59 @@ struct RunEntryEditorView: View {
         notes.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var orderedAnnouncedPRTypes: [RunningPRType] {
+        RunningPRType.allCases.filter { announcedPRTypes.contains($0) }
+    }
+
+    private var newPRAnnouncementView: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "rosette")
+                .font(.headline)
+                .foregroundStyle(.yellow)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(orderedAnnouncedPRTypes.count > 1 ? "New PRs" : "New PR")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(orderedAnnouncedPRTypes.map(\.title).joined(separator: " • "))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.appAccent.opacity(0.96))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.22), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.24), radius: 10, y: 4)
+    }
+
+    private func announceNewPRsAndDismiss(_ records: [RunningPRRecord]) {
+        dismissAfterPRTask?.cancel()
+        announcedPRTypes = records.map(\.type)
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+            showNewPRAnnouncement = true
+        }
+
+        dismissAfterPRTask = Task {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showNewPRAnnouncement = false
+                }
+                dismiss()
+            }
+        }
+    }
+
     private func handleGPSPrimaryAction() {
         if tracker.isTracking {
             endGPSRunAndShowSummary()
@@ -5308,11 +4725,6 @@ struct RunEntryEditorView: View {
             }
 
             let averagePace = (distance > 0 && duration > 0) ? Int((Double(duration) / distance).rounded()) : nil
-            let splits = store.computeRunSplits(
-                route: nil,
-                duration: max(0, duration),
-                distanceMiles: max(0, distance)
-            )
 
             entry = RunEntry(
                 mode: .manual,
@@ -5320,10 +4732,18 @@ struct RunEntryEditorView: View {
                 durationSeconds: max(0, duration),
                 notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
                 route: nil,
-                splits: splits,
+                splits: [],
                 avgPaceSecPerMile: averagePace,
                 elevationGainFeet: nil,
-                distanceSource: .manual
+                distanceSource: .manual,
+                elapsedSeconds: max(0, duration),
+                movingSeconds: max(0, duration),
+                avgPaceElapsedSecPerMile: averagePace,
+                avgPaceMovingSecPerMile: averagePace,
+                elevationLossFeet: nil,
+                minElevationFeet: nil,
+                maxElevationFeet: nil,
+                elevationSeries: []
             )
 
         case .gps:
@@ -5380,13 +4800,25 @@ struct RunEntryEditorView: View {
                 splits: splits,
                 avgPaceSecPerMile: averagePace,
                 elevationGainFeet: nil,
-                distanceSource: source
+                distanceSource: source,
+                elapsedSeconds: max(0, duration),
+                movingSeconds: max(0, duration),
+                avgPaceElapsedSecPerMile: averagePace,
+                avgPaceMovingSecPerMile: averagePace,
+                elevationLossFeet: nil,
+                minElevationFeet: nil,
+                maxElevationFeet: nil,
+                elevationSeries: []
             )
         }
 
-        onSave(entry)
+        let newPRs = onSave(entry)
         Haptics.success()
-        dismiss()
+        if preferredMode == .gps, !newPRs.isEmpty {
+            announceNewPRsAndDismiss(newPRs)
+        } else {
+            dismiss()
+        }
     }
 
     private func recalculateManual(from changedField: ManualInputField) {
@@ -6186,14 +5618,34 @@ struct SessionRowView: View {
     }
 }
 
-// MARK: - Run Detail Pace UI (RUN-DETAIL-D1)
-// Changes:
-// - RUN-DETAIL-D1: Added GPS pace chart section with smoothed pace series rendering.
-// - RUN-DETAIL-D2: Added moving average pace + best 0.5/1/2 mi segment highlight pills.
-// - RUN-DETAIL-D3: Added lazy analytics cache backfill when opening run detail.
+struct RunElevationChartView: View {
+    let points: [RunElevationPoint]
+
+    var body: some View {
+        Chart(Array(points.enumerated()), id: \.offset) { _, point in
+            AreaMark(
+                x: .value("Distance", point.mile),
+                y: .value("Elevation", point.elevationFeet)
+            )
+            .interpolationMethod(.catmullRom)
+            .foregroundStyle(Color.appAccent.opacity(0.18))
+
+            LineMark(
+                x: .value("Distance", point.mile),
+                y: .value("Elevation", point.elevationFeet)
+            )
+            .interpolationMethod(.catmullRom)
+            .foregroundStyle(Color.appAccent)
+            .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+        }
+        .chartYAxis(.hidden)
+        .chartXAxisLabel("Miles")
+        .frame(height: 170)
+    }
+}
+
 struct SessionDetailView: View {
     @EnvironmentObject private var store: TrainingStore
-    @State private var didBackfillAnalytics = false
 
     let sessionID: UUID
 
@@ -6271,186 +5723,89 @@ struct SessionDetailView: View {
                     }
 
                     if let run = session.run {
+                        let hasSamples = hasSampleRoutePoints(run)
+                        let bestSplitPace = run.splits.map(\.paceSecPerMile).min()
+
                         Section("Run") {
-                            runSection(run)
+                            Text("\(run.mode.rawValue) run")
+                                .font(.headline)
+                            if let route = run.route, !route.isEmpty {
+                                RunRouteMapView(route: route)
+                            }
+                            if !run.notes.isEmpty {
+                                Text(run.notes)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Section("Metrics") {
+                            metricRow(title: "Distance", value: String(format: "%.2f mi", run.distanceMiles))
+                            metricRow(title: "Duration (Elapsed)", value: formatDuration(resolvedElapsedSeconds(for: run)))
+                            metricRow(title: "Moving Time", value: formatDuration(resolvedMovingSeconds(for: run)))
+                            if let movingPace = run.avgPaceMovingSecPerMile {
+                                metricRow(title: "Avg Pace (Moving)", value: formatPacePerMile(movingPace))
+                            }
+                            if let elapsedPace = run.avgPaceElapsedSecPerMile ?? run.avgPaceSecPerMile {
+                                metricRow(title: "Avg Pace (Elapsed)", value: formatPacePerMile(elapsedPace))
+                            }
+                        }
+
+                        if hasSamples, !run.splits.isEmpty {
+                            Section("Splits") {
+                                ForEach(run.splits) { split in
+                                    let isBest = bestSplitPace == split.paceSecPerMile
+                                    HStack(spacing: 8) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Mile \(split.splitIndex)")
+                                                .font(.subheadline.weight(.semibold))
+                                            if isBest {
+                                                Text("Best Split")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(Color.appAccent)
+                                            }
+                                        }
+                                        Spacer()
+                                        Text(formatDuration(split.splitSeconds))
+                                            .font(.subheadline.monospacedDigit())
+                                        Text(formatPacePerMile(split.splitPaceSecPerMile))
+                                            .font(.subheadline.monospacedDigit())
+                                            .frame(width: 84, alignment: .trailing)
+                                    }
+                                    .padding(10)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(isBest ? Color.appAccent.opacity(0.16) : Color.white.opacity(0.04))
+                                    )
+                                }
+                            }
+                        }
+
+                        if hasSamples, runHasElevationData(run) {
+                            Section("Elevation") {
+                                if let gain = run.elevationGainFeet {
+                                    metricRow(title: "Gain", value: formatFeet(gain))
+                                }
+                                if let loss = run.elevationLossFeet {
+                                    metricRow(title: "Loss", value: formatFeet(loss))
+                                }
+                                if let min = run.minElevationFeet {
+                                    metricRow(title: "Min Elevation", value: formatFeet(min))
+                                }
+                                if let max = run.maxElevationFeet {
+                                    metricRow(title: "Max Elevation", value: formatFeet(max))
+                                }
+                                if run.elevationSeries.count >= 2 {
+                                    RunElevationChartView(points: run.elevationSeries)
+                                }
+                            }
                         }
                     }
                 }
                 .navigationTitle(session.name)
-                .onAppear {
-                    if !didBackfillAnalytics {
-                        didBackfillAnalytics = true
-                        store.ensureRunAnalyticsCached(for: sessionID)
-                    }
-                }
             } else {
                 ContentUnavailableView("Session not found", systemImage: "clock.badge.xmark")
             }
         }
-    }
-
-    @ViewBuilder
-    private func runSection(_ run: RunEntry) -> some View {
-        let analytics = RunAnalytics.snapshot(for: run)
-        Text("\(run.mode.rawValue) run")
-            .font(.headline)
-
-        Text("Distance: \(run.distanceMiles, specifier: "%.2f") mi")
-        Text("Duration: \(formatDuration(run.durationSeconds))")
-        if let pace = run.avgPaceSecPerMile {
-            Text("Avg Pace: \(formatPacePerMile(pace))")
-        }
-
-        if let route = run.route, !route.isEmpty {
-            RunRouteMapView(route: route)
-        }
-
-        if run.mode == .gps {
-            paceSection(run: run, analytics: analytics)
-        } else {
-            Text("Pace chart available for GPS runs.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-
-        if !run.splits.isEmpty {
-            Divider()
-            ForEach(run.splits) { split in
-                HStack {
-                    Text("Split \(split.index)")
-                    Spacer()
-                    Text("\(split.distanceMiles, specifier: "%.2f") mi")
-                        .monospacedDigit()
-                    Text(formatDuration(split.durationSeconds))
-                        .monospacedDigit()
-                    Text(formatPacePerMile(split.paceSecPerMile))
-                        .monospacedDigit()
-                }
-                .font(.footnote)
-            }
-        }
-
-        if !run.notes.isEmpty {
-            Text(run.notes)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private func paceSection(run: RunEntry, analytics: RunAnalyticsSnapshot) -> some View {
-        Divider()
-
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Pace")
-                .font(.subheadline.weight(.semibold))
-
-            if analytics.paceSeries.count >= 2 {
-                Chart(analytics.paceSeries) { point in
-                    LineMark(
-                        x: .value("Distance", point.mile),
-                        y: .value("Pace", point.paceSecPerMile)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(Color.appAccent.gradient)
-                }
-                .chartXAxis {
-                    AxisMarks(position: .bottom) { value in
-                        if let mile = value.as(Double.self) {
-                            AxisValueLabel("\(mile, specifier: "%.1f")")
-                        }
-                        AxisGridLine()
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading) { value in
-                        if let pace = value.as(Double.self) {
-                            AxisValueLabel(formatPacePerMile(Int(pace.rounded())))
-                        }
-                        AxisGridLine()
-                    }
-                }
-                .chartYScale(domain: paceRange(for: analytics.paceSeries))
-                .frame(height: 210)
-            } else {
-                Text("Pace chart available after enough GPS route samples are captured.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            paceStatsRow(run: run, analytics: analytics)
-        }
-    }
-
-    private func paceStatsRow(run: RunEntry, analytics: RunAnalyticsSnapshot) -> some View {
-        let movingPace = analytics.movingAvgPaceSecPerMile
-        let best = run.bestSegments ?? analytics.bestSegments
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                pacePill(
-                    title: "Avg (moving)",
-                    value: movingPace.map { formatPacePerMile(Int($0.rounded())) } ?? "--"
-                )
-                pacePill(
-                    title: "Best 0.5 mi",
-                    value: formattedBestSegment(best?.halfMileBestSeconds, lengthMiles: 0.5)
-                )
-                pacePill(
-                    title: "Best 1 mi",
-                    value: formattedBestSegment(best?.mileBestSeconds, lengthMiles: 1.0)
-                )
-                pacePill(
-                    title: "Best 2 mi",
-                    value: formattedBestSegment(best?.twoMileBestSeconds, lengthMiles: 2.0)
-                )
-            }
-            .padding(.vertical, 2)
-        }
-    }
-
-    private func pacePill(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.weight(.semibold).monospacedDigit())
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func formattedBestSegment(_ seconds: Double?, lengthMiles: Double) -> String {
-        guard let seconds, seconds > 0 else { return "--" }
-        let clampedSeconds = max(1, Int(seconds.rounded()))
-        let pacePerMile = Int((seconds / lengthMiles).rounded())
-        return "\(formatClock(clampedSeconds)) (\(formatPacePerMile(pacePerMile)))"
-    }
-
-    private func formatClock(_ seconds: Int) -> String {
-        let clamped = max(0, seconds)
-        if clamped >= 3600 {
-            let hours = clamped / 3600
-            let minutes = (clamped % 3600) / 60
-            let secs = clamped % 60
-            return String(format: "%d:%02d:%02d", hours, minutes, secs)
-        }
-        let minutes = clamped / 60
-        let secs = clamped % 60
-        return String(format: "%d:%02d", minutes, secs)
-    }
-
-    private func paceRange(for points: [RunPacePoint]) -> ClosedRange<Double> {
-        guard let minValue = points.map(\.paceSecPerMile).min(), let maxValue = points.map(\.paceSecPerMile).max() else {
-            return 240...1800
-        }
-        let lower = max(240, minValue - 30)
-        let upper = min(1800, maxValue + 30)
-        if lower < upper {
-            return lower...upper
-        }
-        return max(240, lower - 30)...min(1800, upper + 30)
     }
 
     private func formatPacePerMile(_ seconds: Int) -> String {
@@ -6458,6 +5813,41 @@ struct SessionDetailView: View {
         let minutes = clamped / 60
         let secs = clamped % 60
         return String(format: "%d:%02d /mi", minutes, secs)
+    }
+
+    private func metricRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .monospacedDigit()
+        }
+    }
+
+    private func resolvedElapsedSeconds(for run: RunEntry) -> Int {
+        max(run.elapsedSeconds, run.durationSeconds)
+    }
+
+    private func resolvedMovingSeconds(for run: RunEntry) -> Int {
+        let elapsed = resolvedElapsedSeconds(for: run)
+        let moving = run.movingSeconds > 0 ? run.movingSeconds : elapsed
+        return max(0, min(elapsed, moving))
+    }
+
+    private func hasSampleRoutePoints(_ run: RunEntry) -> Bool {
+        (run.route?.count ?? 0) >= 2
+    }
+
+    private func runHasElevationData(_ run: RunEntry) -> Bool {
+        !run.elevationSeries.isEmpty
+            || run.elevationGainFeet != nil
+            || run.elevationLossFeet != nil
+            || run.minElevationFeet != nil
+            || run.maxElevationFeet != nil
+    }
+
+    private func formatFeet(_ value: Double) -> String {
+        "\(Int(value.rounded())) ft"
     }
 }
 
@@ -6956,17 +6346,6 @@ enum Haptics {
 private extension Calendar {
     func startOfMonth(for date: Date) -> Date {
         self.date(from: dateComponents([.year, .month], from: date)) ?? startOfDay(for: date)
-    }
-
-    func startOfWeek(for date: Date) -> Date {
-        let components = dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
-        return self.date(from: components) ?? startOfDay(for: date)
-    }
-}
-
-private extension Double {
-    func clamped(min minimum: Double, max maximum: Double) -> Double {
-        Swift.max(minimum, Swift.min(maximum, self))
     }
 }
 

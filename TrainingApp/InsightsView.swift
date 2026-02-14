@@ -1323,10 +1323,6 @@ struct PremiumInsightsView: View {
     private func bestRaceTime(for run: RunEntry, targetMiles: Double) -> Double? {
         guard run.distanceMiles >= targetMiles else { return nil }
 
-        if targetMiles == 1.0, let segment = run.bestSegments?.mileBestSeconds, segment > 0 {
-            return segment
-        }
-
         if let splitBest = bestWindowTime(from: run.splits, targetMiles: targetMiles) {
             return splitBest
         }
@@ -1340,22 +1336,6 @@ struct PremiumInsightsView: View {
     }
 
     private func bestSegmentSeconds(for run: RunEntry, distanceMiles: Double) -> Double? {
-        switch distanceMiles {
-        case 0.5:
-            if let value = run.bestSegments?.halfMileBestSeconds, value > 0 {
-                return value
-            }
-        case 1.0:
-            if let value = run.bestSegments?.mileBestSeconds, value > 0 {
-                return value
-            }
-        case 2.0:
-            if let value = run.bestSegments?.twoMileBestSeconds, value > 0 {
-                return value
-            }
-        default:
-            break
-        }
         return bestWindowTime(from: run.splits, targetMiles: distanceMiles)
     }
 
