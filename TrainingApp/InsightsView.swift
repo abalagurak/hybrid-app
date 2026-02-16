@@ -6,6 +6,74 @@ extension Notification.Name {
     static let navigateToWorkoutTab = Notification.Name("navigateToWorkoutTab")
 }
 
+private struct InsightInfoButton: View {
+    let message: String
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var isPopoverPresented = false
+    @State private var isSheetPresented = false
+
+    var body: some View {
+        Button {
+            if horizontalSizeClass == .compact {
+                isSheetPresented = true
+            } else {
+                isPopoverPresented = true
+            }
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPopoverPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+            InsightInfoPanel(message: message)
+                .frame(minWidth: 280, idealWidth: 340, maxWidth: 420, minHeight: 140, maxHeight: 360)
+        }
+        .sheet(isPresented: $isSheetPresented) {
+            NavigationStack {
+                InsightInfoPanel(message: message)
+                    .navigationTitle("Metric Info")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") {
+                                isSheetPresented = false
+                            }
+                        }
+                    }
+            }
+            .presentationDetents([.height(250), .medium])
+            .presentationDragIndicator(.visible)
+        }
+        .accessibilityLabel("Metric info")
+        .accessibilityHint(message)
+    }
+}
+
+private struct InsightInfoPanel: View {
+    let message: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(Color.liftingInsightAccent)
+                Text("About this metric")
+                    .font(.subheadline.weight(.semibold))
+            }
+
+            ScrollView {
+                Text(message)
+                    .font(.callout)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
 private extension Color {
     static let runningInsightAccent = Color(red: 0.07, green: 0.53, blue: 0.95)
     static let liftingInsightAccent = Color(red: 0.93, green: 0.41, blue: 0.12)
@@ -152,6 +220,8 @@ struct PremiumInsightsView: View {
     @State private var selectedExercise = ""
     @State private var targetWeight: Double = 135
     @State private var selectedElevationSessionID: UUID?
+    @State private var liftingInsightsCache: [InsightsTimeRange: LiftingInsightsSnapshot] = [:]
+    @State private var loadingLiftingRange: InsightsTimeRange?
 
     private var calendar: Calendar {
         var configured = Calendar.current
@@ -189,8 +259,15 @@ struct PremiumInsightsView: View {
     }
 
     private var filteredLiftingSessions: [WorkoutSession] {
-        guard let cutoff = cutoffDate(for: selectedRange) else { return allLiftingSessions }
-        return allLiftingSessions.filter { $0.completedAt >= cutoff }
+        filteredLiftingSessions(for: selectedRange)
+    }
+
+    private var selectedLiftingSnapshot: LiftingInsightsSnapshot? {
+        liftingInsightsCache[selectedRange]
+    }
+
+    private var isLoadingSelectedLiftingSnapshot: Bool {
+        loadingLiftingRange == selectedRange && selectedLiftingSnapshot == nil
     }
 
     private var availableExercises: [String] {
@@ -468,17 +545,31 @@ struct PremiumInsightsView: View {
                     liftingContent
                 }
             }
-            .padding()
         }
+        .safeAreaPadding(.horizontal, AppUI.Spacing.screenHorizontal)
+        .safeAreaPadding(.bottom, AppUI.Spacing.screenBottom)
         .navigationTitle("Insights")
         .onAppear {
             syncSelections()
+            refreshLiftingSnapshotIfNeeded(for: selectedRange, force: true)
         }
         .onChange(of: store.state.sessions) { _, _ in
             syncSelections()
+            liftingInsightsCache.removeAll()
+            refreshLiftingSnapshotIfNeeded(for: selectedRange, force: true)
         }
-        .onChange(of: selectedRange) { _, _ in
+        .onChange(of: selectedRange) { _, newRange in
             syncElevationSelection()
+            refreshLiftingSnapshotIfNeeded(for: newRange)
+        }
+        .onChange(of: store.state.preferences.weekStartsOnMonday) { _, _ in
+            liftingInsightsCache.removeAll()
+            refreshLiftingSnapshotIfNeeded(for: selectedRange, force: true)
+        }
+        .onChange(of: selectedSection) { _, newSection in
+            if newSection == .lifting {
+                refreshLiftingSnapshotIfNeeded(for: selectedRange)
+            }
         }
         .onChange(of: selectedExercise) { _, _ in
             applySuggestedTargetWeightIfPossible()
@@ -486,22 +577,23 @@ struct PremiumInsightsView: View {
     }
 
     private var controlsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("Insights", selection: $selectedSection) {
-                ForEach(InsightsSection.allCases) { section in
-                    Text(section.rawValue).tag(section)
+        AppCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("Insights", selection: $selectedSection) {
+                    ForEach(InsightsSection.allCases) { section in
+                        Text(section.rawValue).tag(section)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
+                .pickerStyle(.segmented)
 
-            Picker("Time Range", selection: $selectedRange) {
-                ForEach(InsightsTimeRange.allCases) { range in
-                    Text(range.rawValue).tag(range)
+                Picker("Time Range", selection: $selectedRange) {
+                    ForEach(InsightsTimeRange.allCases) { range in
+                        Text(range.rawValue).tag(range)
+                    }
                 }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
         }
-        .glassCard()
     }
 
     @ViewBuilder
@@ -530,6 +622,16 @@ struct PremiumInsightsView: View {
                 description: "Complete lifting sets to unlock strength and volume analytics."
             )
         } else {
+            if let snapshot = selectedLiftingSnapshot {
+                highlightsCard(summary: snapshot.globalHighlights)
+                balanceCard(summary: snapshot.muscleGroupSummary)
+                consistencyCard(summary: snapshot.consistencySummary)
+            } else if isLoadingSelectedLiftingSnapshot {
+                loadingLiftingInsightsCard
+            } else {
+                loadingLiftingInsightsCard
+            }
+
             exerciseSelectionCard
 
             if selectedExercise.isEmpty {
@@ -558,6 +660,296 @@ struct PremiumInsightsView: View {
         }
     }
 
+    private var loadingLiftingInsightsCard: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            Text("Calculating lifting insights...")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .glassCard()
+    }
+
+    private func highlightsCard(summary: GlobalHighlightsSummary) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader("Highlights") {
+                InsightInfoButton(message: "Top PR and volume wins across all exercises in your selected time range.")
+            }
+
+            if !summary.hasUsableSets {
+                Text("No usable sets in this range yet. Complete sets with weight and reps to unlock highlights.")
+                    .foregroundStyle(.secondary)
+            } else {
+                if let highestE1RM = summary.highestE1RM {
+                    liftInsightMetricRow(
+                        title: "Highest e1RM overall",
+                        value: formatWeight(highestE1RM.e1RM),
+                        detail: "\(highestE1RM.exerciseName) • \(highestE1RM.date.formatted(date: .abbreviated, time: .omitted))",
+                        info: "Estimated 1RM is computed as weight × (1 + reps/30), and this is the highest single-set value in range."
+                    )
+                }
+
+                if let improvement = summary.biggestE1RMImprovement {
+                    let deltaText = formatSignedWeight(improvement.delta)
+                    let detail = "\(improvement.exerciseName) • \(improvement.firstDate.formatted(date: .abbreviated, time: .omitted)) to \(improvement.lastDate.formatted(date: .abbreviated, time: .omitted))"
+                    liftInsightMetricRow(
+                        title: "Biggest e1RM improvement",
+                        value: deltaText,
+                        detail: detail,
+                        info: "For each exercise, this compares first-session best e1RM vs last-session best e1RM in range and picks the largest delta."
+                    )
+                } else {
+                    liftInsightMetricRow(
+                        title: "Biggest e1RM improvement",
+                        value: "Not enough sessions yet",
+                        detail: "Track at least 2 sessions for the same exercise to calculate improvement.",
+                        info: "Improvement needs at least two sessions for one exercise within the selected range."
+                    )
+                }
+
+                if let highestSession = summary.highestSessionVolume {
+                    liftInsightMetricRow(
+                        title: "Highest session volume",
+                        value: formatCompactNumber(highestSession.volume),
+                        detail: "\(highestSession.workoutName) • \(highestSession.date.formatted(date: .abbreviated, time: .omitted))",
+                        info: "Session volume is the sum of weight × reps across all usable sets in that workout."
+                    )
+                }
+
+                if let highestWeek = summary.highestWeeklyVolume {
+                    liftInsightMetricRow(
+                        title: "Highest weekly volume",
+                        value: formatCompactNumber(highestWeek.volume),
+                        detail: "Week of \(highestWeek.weekStart.formatted(date: .abbreviated, time: .omitted))",
+                        info: "Weekly volume sums all usable-set volume from sessions grouped by calendar week."
+                    )
+                }
+            }
+        }
+        .glassCard()
+    }
+
+    private func balanceCard(summary: MuscleGroupSummary) -> some View {
+        let chartPoints = summary.weeklyVolumes
+        let weeklyTotals = Dictionary(grouping: chartPoints, by: \.weekStart)
+            .mapValues { points in
+                points.reduce(0) { partial, point in
+                    partial + point.volume
+                }
+            }
+        let maxStackedWeeklyVolume = weeklyTotals.values.max() ?? 0
+        let yMax = max(1, maxStackedWeeklyVolume * 1.2)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            SectionHeader("Balance") {
+                InsightInfoButton(message: "Shows where your lifting volume is going by muscle group and whether push and pull are balanced.")
+            }
+
+            if !summary.hasUsableSets {
+                Text("No usable sets in this range yet, so balance metrics are unavailable.")
+                    .foregroundStyle(.secondary)
+            } else {
+                if chartPoints.isEmpty {
+                    Text("Not enough weekly data to chart yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Chart(chartPoints) { point in
+                        BarMark(
+                            x: .value("Week", point.weekStart, unit: .weekOfYear),
+                            y: .value("Volume", point.volume)
+                        )
+                        .foregroundStyle(by: .value("Muscle Group", point.muscleGroup.displayName))
+                    }
+                    .chartForegroundStyleScale(
+                        domain: MuscleGroup.allCases.map(\.displayName),
+                        range: MuscleGroup.allCases.map(muscleGroupColor(for:))
+                    )
+                    .chartYScale(domain: 0...yMax)
+                    .chartYAxis {
+                        AxisMarks(position: .leading)
+                    }
+                    .chartPlotStyle { plotArea in
+                        plotArea.clipped()
+                    }
+                    .chartLegend(position: .bottom, alignment: .leading)
+                    .frame(height: 220)
+                }
+
+                liftInsightMetricRow(
+                    title: "Push : Pull",
+                    value: formatPushPullRatio(summary),
+                    detail: pushPullStatusText(summary),
+                    info: "This v1 ratio uses push = Chest + Shoulders and pull = Back for the selected range."
+                )
+
+                liftInsightMetricRow(
+                    title: "Torso focus score",
+                    value: "\(formatDecimal(summary.torsoFocusScore * 100, digits: 0))%",
+                    detail: "Chest + Back + Shoulders volume divided by total lifting volume.",
+                    info: "Higher values mean more of your training volume is concentrated on torso muscle groups."
+                )
+            }
+        }
+        .glassCard()
+    }
+
+    private func consistencyCard(summary: ConsistencySummary) -> some View {
+        let maxWorkouts = max(1, summary.weeklyWorkoutCounts.map(\.workouts).max() ?? 1)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            SectionHeader("Consistency") {
+                InsightInfoButton(message: "Tracks workout frequency, streaks, rest spacing, and recovery cadence by muscle group.")
+            }
+
+            if !summary.hasWorkoutDays {
+                Text("No workout days with usable sets in this range yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Chart(summary.weeklyWorkoutCounts) { point in
+                    BarMark(
+                        x: .value("Week", point.weekStart, unit: .weekOfYear),
+                        y: .value("Workout Days", point.workouts)
+                    )
+                    .foregroundStyle(Color.liftingInsightAccent)
+                }
+                .chartYScale(domain: 0...Double(maxWorkouts + 1))
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .frame(height: 180)
+
+                liftInsightMetricRow(
+                    title: "Current streak",
+                    value: "\(summary.currentStreakDays) day\(summary.currentStreakDays == 1 ? "" : "s")",
+                    detail: "Consecutive workout days ending on your latest workout day in range.",
+                    info: "A streak is one or more consecutive calendar days with at least one workout session that has usable sets."
+                )
+
+                liftInsightMetricRow(
+                    title: "Longest streak",
+                    value: "\(summary.longestStreakDays) day\(summary.longestStreakDays == 1 ? "" : "s")",
+                    detail: "Best consecutive-day run in the selected range.",
+                    info: "Longest streak scans the full range and returns the maximum run of consecutive workout days."
+                )
+
+                let avgRestText = summary.averageRestDaysBetweenSessions
+                    .map { "\(formatDecimal($0, digits: 1)) days" }
+                    ?? "Not enough data"
+                liftInsightMetricRow(
+                    title: "Average rest days",
+                    value: avgRestText,
+                    detail: "Computed between workout days (same-day multiple sessions count as one day).",
+                    info: "Rest days are calendar days between workout days; back-to-back workouts count as 0 rest days."
+                )
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Recovery spacing by muscle group")
+                            .font(.subheadline.weight(.semibold))
+                        InsightInfoButton(message: "Average days between workout days that include each muscle group.")
+                    }
+
+                    HStack {
+                        Text("Muscle Group")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Avg Days")
+                            .frame(width: 74, alignment: .trailing)
+                        Text("Sessions")
+                            .frame(width: 64, alignment: .trailing)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                    ForEach(summary.muscleGroupSpacing) { row in
+                        HStack {
+                            Text(row.muscleGroup.displayName)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(row.averageDaysBetween.map { formatDecimal($0, digits: 1) } ?? "—")
+                                .frame(width: 74, alignment: .trailing)
+                                .monospacedDigit()
+                            Text("\(row.sessionsCount)")
+                                .frame(width: 64, alignment: .trailing)
+                                .monospacedDigit()
+                        }
+                        .font(.caption)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+        .glassCard()
+    }
+
+    private func liftInsightMetricRow(title: String, value: String, detail: String, info: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                InsightInfoButton(message: info)
+                Spacer()
+                Text(value)
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+            }
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .appRowStyle()
+    }
+
+    private func muscleGroupColor(for group: MuscleGroup) -> Color {
+        switch group {
+        case .chest:
+            return Color(red: 0.92, green: 0.39, blue: 0.22)
+        case .back:
+            return Color(red: 0.12, green: 0.57, blue: 0.86)
+        case .legs:
+            return Color(red: 0.20, green: 0.66, blue: 0.42)
+        case .shoulders:
+            return Color(red: 0.99, green: 0.65, blue: 0.18)
+        case .arms:
+            return Color(red: 0.75, green: 0.33, blue: 0.85)
+        case .core:
+            return Color(red: 0.55, green: 0.47, blue: 0.41)
+        case .other:
+            return .gray
+        }
+    }
+
+    private func formatSignedWeight(_ value: Double) -> String {
+        let sign = value >= 0 ? "+" : "-"
+        return "\(sign)\(formatWeight(abs(value)))"
+            .replacingOccurrences(of: "\(weightUnit)", with: "")
+            .trimmingCharacters(in: .whitespaces)
+            + " \(weightUnit)"
+    }
+
+    private func formatPushPullRatio(_ summary: MuscleGroupSummary) -> String {
+        guard summary.pushVolume > 0 || summary.pullVolume > 0 else {
+            return "No push/pull volume"
+        }
+        guard let ratio = summary.pushPullRatio else {
+            return "Push only"
+        }
+        return "\(formatDecimal(ratio, digits: 1)) : 1"
+    }
+
+    private func pushPullStatusText(_ summary: MuscleGroupSummary) -> String {
+        guard let ratio = summary.pushPullRatio else {
+            if summary.pullVolume > 0 {
+                return "Pull-dominant (no push volume captured)."
+            }
+            return "Pull volume is zero, so ratio cannot be balanced yet."
+        }
+        if ratio < 0.8 {
+            return "Imbalance indicator: low push relative to pull."
+        }
+        if ratio > 1.25 {
+            return "Imbalance indicator: high push relative to pull."
+        }
+        return "Within suggested range (0.8 to 1.25)."
+    }
+
     private var runningSummaryCard: some View {
         HStack(spacing: 10) {
             insightStatTile(
@@ -583,10 +975,7 @@ struct PremiumInsightsView: View {
 
     private var cumulativeDistanceCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Cumulative Distance")
-                    .font(.headline)
-                Spacer()
+            SectionHeader("Cumulative Distance") {
                 Text("Miles")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -665,10 +1054,7 @@ struct PremiumInsightsView: View {
     private var paceDistributionCard: some View {
         let maxCount = max(1, paceDistributionBins.map(\.count).max() ?? 1)
         return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Pace Distribution")
-                    .font(.headline)
-                Spacer()
+            SectionHeader("Pace Distribution") {
                 Text("Lower is faster")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -716,10 +1102,7 @@ struct PremiumInsightsView: View {
 
     private var prProgressionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("PR Progression")
-                    .font(.headline)
-                Spacer()
+            SectionHeader("PR Progression") {
                 Text("Lower is faster")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -767,10 +1150,7 @@ struct PremiumInsightsView: View {
 
     private var elevationProfileCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Elevation Profile")
-                    .font(.headline)
-                Spacer()
+            SectionHeader("Elevation Profile") {
                 if !elevationSessions.isEmpty {
                     Picker("Run", selection: Binding<UUID?>(
                         get: { selectedElevationSessionID ?? elevationSessions.first?.id },
@@ -826,10 +1206,7 @@ struct PremiumInsightsView: View {
 
     private var bestSegmentsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Best Segments")
-                    .font(.headline)
-                Spacer()
+            SectionHeader("Best Segments") {
                 Text("All-time vs 90 days")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -878,10 +1255,7 @@ struct PremiumInsightsView: View {
 
     private var exerciseSelectionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Exercise Analysis")
-                    .font(.headline)
-                Spacer()
+            SectionHeader("Exercise Analysis") {
                 Picker("Exercise", selection: $selectedExercise) {
                     ForEach(availableExercises, id: \.self) { name in
                         Text(name).tag(name)
@@ -925,8 +1299,7 @@ struct PremiumInsightsView: View {
 
     private var estimatedOneRMCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Estimated 1RM")
-                .font(.headline)
+            SectionHeader("Estimated 1RM")
 
             Chart(exerciseSessionPoints) { point in
                 LineMark(
@@ -962,8 +1335,7 @@ struct PremiumInsightsView: View {
 
     private var maxWeightCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Max Weight Progression")
-                .font(.headline)
+            SectionHeader("Max Weight Progression")
 
             Chart(exerciseSessionPoints) { point in
                 LineMark(
@@ -987,8 +1359,7 @@ struct PremiumInsightsView: View {
         let yMax = max(1, maxVolume * 1.2)
 
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Volume Per Workout")
-                .font(.headline)
+            SectionHeader("Volume Per Workout")
 
             Chart(exerciseVolumePoints) { point in
                 BarMark(
@@ -1026,8 +1397,7 @@ struct PremiumInsightsView: View {
     private var repsAtTargetWeightCard: some View {
         let maxWeight = max(exerciseBestWeight * 1.2, targetWeight)
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Reps At Specific Weight")
-                .font(.headline)
+            SectionHeader("Reps At Specific Weight")
 
             Stepper(
                 value: $targetWeight,
@@ -1075,8 +1445,7 @@ struct PremiumInsightsView: View {
     private var frequencyCard: some View {
         let maxCount = max(1, frequencyPoints.map(\.count).max() ?? 1)
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Exercise Frequency")
-                .font(.headline)
+            SectionHeader("Exercise Frequency")
 
             Chart(frequencyPoints) { point in
                 BarMark(
@@ -1096,51 +1465,23 @@ struct PremiumInsightsView: View {
 
     private func emptyStateCard(title: String, description: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.headline)
+            SectionHeader(title)
             Text(description)
                 .foregroundStyle(.secondary)
-            Button {
+            PrimaryButton("Start Session") {
                 NotificationCenter.default.post(name: .navigateToWorkoutTab, object: nil)
-            } label: {
-                Text("Start Session")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .accessibilityHint("Switches to Workout tab")
         }
         .glassCard()
     }
 
     private func insightStatTile(title: String, value: String, subtitle: String, accent: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.headline.monospacedDigit())
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Text(subtitle)
-                .font(.caption2)
-                .foregroundStyle(accent.opacity(0.85))
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        StatChip(title: title, value: value, subtitle: subtitle, accent: accent)
     }
 
     private func elevationMetricPill(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        StatChip(title: title, value: value)
     }
 
     private func syncSelections() {
@@ -1203,6 +1544,39 @@ struct PremiumInsightsView: View {
             }
         }
         return nil
+    }
+
+    private func filteredLiftingSessions(for range: InsightsTimeRange) -> [WorkoutSession] {
+        guard let cutoff = cutoffDate(for: range) else { return allLiftingSessions }
+        return allLiftingSessions.filter { $0.completedAt >= cutoff }
+    }
+
+    private func refreshLiftingSnapshotIfNeeded(for range: InsightsTimeRange, force: Bool = false) {
+        if !force, liftingInsightsCache[range] != nil {
+            return
+        }
+
+        let sessions = filteredLiftingSessions(for: range)
+        let rangeStart = cutoffDate(for: range)
+        let rangeEnd = Date()
+        loadingLiftingRange = range
+
+        Task {
+            let snapshot = await LiftingInsightsComputationService.computeSnapshot(
+                sessions: sessions,
+                rangeStart: rangeStart,
+                rangeEnd: rangeEnd,
+                calendar: calendar
+            )
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                liftingInsightsCache[range] = snapshot
+                if loadingLiftingRange == range {
+                    loadingLiftingRange = nil
+                }
+            }
+        }
     }
 
     private func cutoffDate(for range: InsightsTimeRange) -> Date? {
@@ -1430,14 +1804,11 @@ struct PremiumInsightsView: View {
             $0.name.caseInsensitiveCompare(exerciseName) == .orderedSame
         }
         let allSets = matchingExercises.flatMap(\.sets)
-        let completedSets = allSets.filter(\.isCompleted)
-        let source = completedSets.isEmpty ? allSets : completedSets
-        return source.filter { $0.reps > 0 && $0.weight > 0 }
+        return LiftingInsightsAggregator.usableSets(from: allSets)
     }
 
     private func estimateOneRM(weight: Double, reps: Int) -> Double {
-        guard weight > 0, reps > 0 else { return 0 }
-        return weight * (1 + (Double(reps) / 30.0))
+        LiftingInsightsAggregator.estimateOneRM(weight: weight, reps: reps)
     }
 
     private func formatPace(secondsPerMile: Double, includeUnit: Bool = true) -> String {

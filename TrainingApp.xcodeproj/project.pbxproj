@@ -7,10 +7,27 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F1A0000101B1000000000024 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000023 /* DesignSystem.swift */; };
 		F1A0000101B1000000000019 /* InsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000020 /* InsightsView.swift */; };
 		F1A0000101B1000000000021 /* TrainingLoadCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000022 /* TrainingLoadCalculator.swift */; };
 		F1A0000101B1000000000001 /* TrainingApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000002 /* TrainingApp.swift */; };
+		F1A0000101B1000000000031 /* DataTransferService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000025 /* DataTransferService.swift */; };
+		F1A0000101B1000000000032 /* DataTransferSettingsSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000026 /* DataTransferSettingsSectionView.swift */; };
+		F1A0000101B1000000000033 /* DataTransferServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000028 /* DataTransferServiceTests.swift */; };
+		F1A0000101B1000000000034 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000029 /* XCTest.framework */; };
+		F1A0000101B1000000000045 /* LiftingInsightsAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000046 /* LiftingInsightsAggregator.swift */; };
+		F1A0000101B1000000000047 /* LiftingInsightsAggregatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0000101B1000000000048 /* LiftingInsightsAggregatorTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		F1A0000101B1000000000040 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F1A0000101B1000000000013 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F1A0000101B1000000000009;
+			remoteInfo = TrainingApp;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		F1A0000101B1000000000002 /* TrainingApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingApp.swift; sourceTree = "<group>"; };
@@ -18,6 +35,14 @@
 		F1A0000101B1000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		F1A0000101B1000000000020 /* InsightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightsView.swift; sourceTree = "<group>"; };
 		F1A0000101B1000000000022 /* TrainingLoadCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingLoadCalculator.swift; sourceTree = "<group>"; };
+		F1A0000101B1000000000023 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
+		F1A0000101B1000000000025 /* DataTransferService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataTransferService.swift; sourceTree = "<group>"; };
+		F1A0000101B1000000000026 /* DataTransferSettingsSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataTransferSettingsSectionView.swift; sourceTree = "<group>"; };
+		F1A0000101B1000000000027 /* TrainingAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TrainingAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1A0000101B1000000000028 /* DataTransferServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataTransferServiceTests.swift; sourceTree = "<group>"; };
+		F1A0000101B1000000000029 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		F1A0000101B1000000000046 /* LiftingInsightsAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiftingInsightsAggregator.swift; sourceTree = "<group>"; };
+		F1A0000101B1000000000048 /* LiftingInsightsAggregatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiftingInsightsAggregatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -28,6 +53,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F1A0000101B1000000000035 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F1A0000101B1000000000034 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -35,6 +68,8 @@
 			isa = PBXGroup;
 			children = (
 				F1A0000101B1000000000008 /* TrainingApp */,
+				F1A0000101B1000000000030 /* TrainingAppTests */,
+				F1A0000101B1000000000044 /* Frameworks */,
 				F1A0000101B1000000000007 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				F1A0000101B1000000000003 /* TrainingApp.app */,
+				F1A0000101B1000000000027 /* TrainingAppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -52,10 +88,31 @@
 			children = (
 				F1A0000101B1000000000002 /* TrainingApp.swift */,
 				F1A0000101B1000000000020 /* InsightsView.swift */,
+				F1A0000101B1000000000046 /* LiftingInsightsAggregator.swift */,
 				F1A0000101B1000000000022 /* TrainingLoadCalculator.swift */,
+				F1A0000101B1000000000023 /* DesignSystem.swift */,
+				F1A0000101B1000000000025 /* DataTransferService.swift */,
+				F1A0000101B1000000000026 /* DataTransferSettingsSectionView.swift */,
 				F1A0000101B1000000000004 /* Info.plist */,
 			);
 			path = TrainingApp;
+			sourceTree = "<group>";
+		};
+		F1A0000101B1000000000030 /* TrainingAppTests */ = {
+			isa = PBXGroup;
+			children = (
+				F1A0000101B1000000000028 /* DataTransferServiceTests.swift */,
+				F1A0000101B1000000000048 /* LiftingInsightsAggregatorTests.swift */,
+			);
+			path = TrainingAppTests;
+			sourceTree = "<group>";
+		};
+		F1A0000101B1000000000044 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				F1A0000101B1000000000029 /* XCTest.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -78,6 +135,24 @@
 			productReference = F1A0000101B1000000000003 /* TrainingApp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F1A0000101B1000000000038 /* TrainingAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F1A0000101B1000000000043 /* Build configuration list for PBXNativeTarget "TrainingAppTests" */;
+			buildPhases = (
+				F1A0000101B1000000000036 /* Sources */,
+				F1A0000101B1000000000035 /* Frameworks */,
+				F1A0000101B1000000000037 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F1A0000101B1000000000039 /* PBXTargetDependency */,
+			);
+			name = TrainingAppTests;
+			productName = TrainingAppTests;
+			productReference = F1A0000101B1000000000027 /* TrainingAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -90,6 +165,10 @@
 				TargetAttributes = {
 					F1A0000101B1000000000009 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					F1A0000101B1000000000038 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = F1A0000101B1000000000009;
 					};
 				};
 			};
@@ -107,12 +186,20 @@
 			projectRoot = "";
 			targets = (
 				F1A0000101B1000000000009 /* TrainingApp */,
+				F1A0000101B1000000000038 /* TrainingAppTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		F1A0000101B1000000000012 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F1A0000101B1000000000037 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -126,13 +213,34 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F1A0000101B1000000000024 /* DesignSystem.swift in Sources */,
 				F1A0000101B1000000000019 /* InsightsView.swift in Sources */,
 				F1A0000101B1000000000021 /* TrainingLoadCalculator.swift in Sources */,
 				F1A0000101B1000000000001 /* TrainingApp.swift in Sources */,
+				F1A0000101B1000000000031 /* DataTransferService.swift in Sources */,
+				F1A0000101B1000000000032 /* DataTransferSettingsSectionView.swift in Sources */,
+				F1A0000101B1000000000045 /* LiftingInsightsAggregator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F1A0000101B1000000000036 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F1A0000101B1000000000033 /* DataTransferServiceTests.swift in Sources */,
+				F1A0000101B1000000000047 /* LiftingInsightsAggregatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F1A0000101B1000000000039 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F1A0000101B1000000000009 /* TrainingApp */;
+			targetProxy = F1A0000101B1000000000040 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		F1A0000101B1000000000015 /* Debug */ = {
@@ -182,6 +290,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = R5FBTQ23TK;
+				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TrainingApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -194,6 +303,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -223,6 +333,54 @@
 			};
 			name = Release;
 		};
+		F1A0000101B1000000000041 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = R5FBTQ23TK;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexbalagurak.trainingappTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TrainingApp.app/TrainingApp";
+			};
+			name = Debug;
+		};
+		F1A0000101B1000000000042 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = R5FBTQ23TK;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexbalagurak.trainingappTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TrainingApp.app/TrainingApp";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -240,6 +398,15 @@
 			buildConfigurations = (
 				F1A0000101B1000000000015 /* Debug */,
 				F1A0000101B1000000000016 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F1A0000101B1000000000043 /* Build configuration list for PBXNativeTarget "TrainingAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F1A0000101B1000000000041 /* Debug */,
+				F1A0000101B1000000000042 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
