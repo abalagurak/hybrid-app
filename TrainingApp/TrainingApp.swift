@@ -4,10 +4,6 @@ import CoreLocation
 import MapKit
 import UIKit
 
-private extension Color {
-    static let appAccent = Color(red: 0.8, green: 48.0 / 255.0, blue: 0.0)
-}
-
 private enum AppTextRole {
     case hero
     case title
@@ -252,6 +248,9 @@ struct LoggedSet: Codable, Identifiable, Hashable {
     var weight: Double
     var style: SetStyle = .working
     var isCompleted: Bool = false
+    var distance: Double?
+    var seconds: Double?
+    var rpe: Double?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -259,6 +258,9 @@ struct LoggedSet: Codable, Identifiable, Hashable {
         case weight
         case style
         case isCompleted
+        case distance
+        case seconds
+        case rpe
     }
 
     init(
@@ -266,13 +268,19 @@ struct LoggedSet: Codable, Identifiable, Hashable {
         reps: Int,
         weight: Double,
         style: SetStyle = .working,
-        isCompleted: Bool = false
+        isCompleted: Bool = false,
+        distance: Double? = nil,
+        seconds: Double? = nil,
+        rpe: Double? = nil
     ) {
         self.id = id
         self.reps = reps
         self.weight = weight
         self.style = style
         self.isCompleted = isCompleted
+        self.distance = distance
+        self.seconds = seconds
+        self.rpe = rpe
     }
 
     init(from decoder: Decoder) throws {
@@ -282,6 +290,9 @@ struct LoggedSet: Codable, Identifiable, Hashable {
         weight = try container.decode(Double.self, forKey: .weight)
         style = try container.decodeIfPresent(SetStyle.self, forKey: .style) ?? .working
         isCompleted = try container.decodeIfPresent(Bool.self, forKey: .isCompleted) ?? false
+        distance = try container.decodeIfPresent(Double.self, forKey: .distance)
+        seconds = try container.decodeIfPresent(Double.self, forKey: .seconds)
+        rpe = try container.decodeIfPresent(Double.self, forKey: .rpe)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -291,6 +302,9 @@ struct LoggedSet: Codable, Identifiable, Hashable {
         try container.encode(weight, forKey: .weight)
         try container.encode(style, forKey: .style)
         try container.encode(isCompleted, forKey: .isCompleted)
+        try container.encodeIfPresent(distance, forKey: .distance)
+        try container.encodeIfPresent(seconds, forKey: .seconds)
+        try container.encodeIfPresent(rpe, forKey: .rpe)
     }
 }
 
@@ -2497,18 +2511,23 @@ struct UndoSnackbar: View {
             Text(message)
                 .font(.footnote.weight(.semibold))
                 .lineLimit(2)
+                .foregroundStyle(.primary)
             Spacer()
             if let onUndo {
                 Button("Undo", action: onUndo)
                     .font(.footnote.weight(.bold))
+                    .appHitTarget()
             }
             Button {
                 onDismiss?()
             } label: {
                 Image(systemName: "xmark")
                     .font(.caption.bold())
+                    .frame(width: AppUI.Metrics.minimumHitTarget, height: AppUI.Metrics.minimumHitTarget)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss notification")
+            .accessibilityHint("Hides this message")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -2532,7 +2551,7 @@ struct RootView: View {
 
             if store.state.account == nil {
                 AccountSetupView()
-                    .padding()
+                    .safeAreaPadding(.horizontal, AppUI.Spacing.screenHorizontal)
             } else {
                 MainTabsView()
             }
@@ -2599,16 +2618,13 @@ struct AccountSetupView: View {
                     .glassField()
             }
 
-            Button {
+            PrimaryButton(
+                "Create Account",
+                isDisabled: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                accessibilityHintText: "Creates your local account profile"
+            ) {
                 store.createAccount(displayName: name, email: email)
-            } label: {
-                Text("Create Account")
-                    .appText(.button)
-                    .frame(maxWidth: .infinity)
-                    .padding(14)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Text("Default appearance is dark mode. You can switch to light or system in Settings.")
                 .appText(.caption)
@@ -2678,6 +2694,14 @@ struct MainTabsView: View {
             .tag(MainTab.insights)
 
             NavigationStack {
+                ProgressView()
+            }
+            .tabItem {
+                Label("Progress", systemImage: "chart.line.uptrend.xyaxis")
+            }
+            .tag(MainTab.progress)
+
+            NavigationStack {
                 SettingsView()
             }
             .tabItem {
@@ -2697,7 +2721,7 @@ struct WorkoutView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: AppUI.Spacing.large) {
                 welcomeCard
 
                 if store.state.activeSession != nil {
@@ -2712,8 +2736,9 @@ struct WorkoutView: View {
 
                 quickStatsCard
             }
-            .padding()
         }
+        .safeAreaPadding(.horizontal, AppUI.Spacing.screenHorizontal)
+        .safeAreaPadding(.bottom, AppUI.Spacing.screenBottom)
         .navigationTitle("Workout")
         .navigationDestination(isPresented: $openActiveSession) {
             ActiveSessionView()
@@ -2721,117 +2746,114 @@ struct WorkoutView: View {
     }
 
     private var welcomeCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Welcome back")
-                .appText(.headline)
-                .foregroundStyle(.secondary)
+        AppCard {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionHeader("Welcome back")
 
-            Text(store.state.account?.displayName ?? "Athlete")
-                .appText(.hero)
+                Text(store.state.account?.displayName ?? "Athlete")
+                    .appText(.hero)
 
-            Text("Start a new lifting session, launch a run, or continue your current workout.")
-                .appText(.body)
-                .foregroundStyle(.secondary)
+                Text("Start a new lifting session, launch a run, or continue your current workout.")
+                    .appText(.body)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
     }
 
     private var activeSessionCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Active Session")
-                .appText(.headline)
+        AppCard {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader("Active Session")
 
-            if let active = store.state.activeSession {
-                Text(active.name)
-                    .appText(.title)
-                Text("Started \(active.startedAt.formatted(date: .abbreviated, time: .shortened))")
-                    .appText(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Button("Continue") {
-                    openActiveSession = true
+                if let active = store.state.activeSession {
+                    Text(active.name)
+                        .appText(.title)
+                    Text("Started \(active.startedAt.formatted(date: .abbreviated, time: .shortened))")
+                        .appText(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderedProminent)
 
-                Button("Discard", role: .destructive) {
-                    store.discardActiveSession()
+                HStack {
+                    PrimaryButton("Continue") {
+                        openActiveSession = true
+                    }
+
+                    Button("Discard", role: .destructive) {
+                        store.discardActiveSession()
+                    }
+                    .buttonStyle(.bordered)
+                    .appHitTarget()
+                    .accessibilityHint("Deletes the in-progress session")
                 }
-                .buttonStyle(.bordered)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
     }
 
     private var startCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Start")
-                .appText(.headline)
+        AppCard {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader("Start")
 
-            Button {
-                store.startFreshSession(named: "New Session")
-                openActiveSession = true
-            } label: {
-                Label("Start Session", systemImage: "plus.circle.fill")
-                    .appText(.button)
-                    .frame(maxWidth: .infinity)
+                PrimaryButton("Start Session", systemImage: "plus.circle.fill") {
+                    store.startFreshSession(named: "New Session")
+                    openActiveSession = true
+                }
+                .accessibilityHint("Creates a new workout session")
             }
-            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
     }
 
     private var templatesCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Quick Templates")
-                .appText(.headline)
+        AppCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader("Quick Templates")
 
-            let columns = [
-                GridItem(.flexible(), spacing: 10),
-                GridItem(.flexible(), spacing: 10)
-            ]
-            LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(Array(store.templatesSorted.prefix(4))) { template in
-                    Button {
-                        store.startSession(from: template)
-                        openActiveSession = true
-                    } label: {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(template.name)
-                                .appText(.headline)
-                                .lineLimit(2)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text("\(template.exercises.count) exercises")
-                                .appText(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            HStack {
-                                Spacer()
-                                Label("Start", systemImage: "play.fill")
+                let columns = [
+                    GridItem(.flexible(), spacing: 10),
+                    GridItem(.flexible(), spacing: 10)
+                ]
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(Array(store.templatesSorted.prefix(4))) { template in
+                        Button {
+                            store.startSession(from: template)
+                            openActiveSession = true
+                        } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(template.name)
+                                    .appText(.headline)
+                                    .lineLimit(2)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text("\(template.exercises.count) exercises")
                                     .appText(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                HStack {
+                                    Spacer()
+                                    Label("Start", systemImage: "play.fill")
+                                        .appText(.caption)
+                                }
                             }
+                            .padding(12)
+                            .frame(minHeight: 110)
+                            .appRowStyle(horizontalPadding: 0, verticalPadding: 0)
                         }
-                        .padding(12)
-                        .frame(minHeight: 110)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Start template \(template.name)")
+                        .accessibilityHint("Creates a session from this template")
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
     }
 
     private var quickStatsCard: some View {
         HStack(spacing: 10) {
-            StatTile(title: "Sessions", value: "\(store.state.sessions.count)")
-            StatTile(title: "Volume", value: shortMass(store.totalVolume))
-            StatTile(title: "Run", value: "\(String(format: "%.1f", store.totalRunDistanceMiles)) mi")
+            StatChip(title: "Sessions", value: "\(store.state.sessions.count)")
+            StatChip(title: "Volume", value: shortMass(store.totalVolume))
+            StatChip(title: "Run", value: "\(String(format: "%.1f", store.totalRunDistanceMiles)) mi")
         }
         .frame(maxWidth: .infinity)
     }
@@ -2842,19 +2864,7 @@ struct StatTile: View {
     let value: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .appText(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .appText(.headline)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        StatChip(title: title, value: value)
     }
 }
 
@@ -2878,6 +2888,8 @@ struct ActiveSessionView: View {
     @State private var sessionNotesExpanded = false
 
     @State private var templateName = ""
+    @State private var runQuickMode: RunMode = .manual
+    @State private var runQuickModeSessionID: UUID?
 
     private struct PendingDeletedSet {
         var exerciseID: UUID
@@ -2909,319 +2921,16 @@ struct ActiveSessionView: View {
     var body: some View {
         Group {
             if let session = store.state.activeSession {
-                List {
-                    Section {
-                        sessionHeader(startedAt: session.startedAt)
-
-                        TextField(
-                            "Workout name",
-                            text: Binding(
-                                get: { store.state.activeSession?.name ?? "" },
-                                set: { store.renameActiveSession($0) }
-                            )
-                        )
-                        .font(.subheadline)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    sessionNotesExpanded.toggle()
-                                }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    let hasSessionNotes = !(store.state.activeSession?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                                    Image(systemName: hasSessionNotes ? "note.text" : "square.and.pencil")
-                                    Text(hasSessionNotes ? "Edit session note" : "Add session note")
-                                    Spacer()
-                                    Image(systemName: sessionNotesExpanded ? "chevron.up" : "chevron.down")
-                                }
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-
-                            if sessionNotesExpanded {
-                                TextEditor(
-                                    text: Binding(
-                                        get: { store.state.activeSession?.notes ?? "" },
-                                        set: { store.updateActiveSessionNotes($0) }
-                                    )
-                                )
-                                .font(.caption2)
-                                .frame(minHeight: 44, maxHeight: 80)
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                            }
-
-                            Text("Saved offline \(store.lastSavedAt.formatted(date: .omitted, time: .shortened))")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
-                    }
-
-                    Section("Exercises") {
-                        ForEach(session.exercises) { exercise in
-                            ExerciseCardView(
-                                exercise: exercise,
-                                previousSets: store.previousSets(for: exercise.name),
-                                onUpdateNotes: { store.updateActiveExerciseNotes(exerciseID: exercise.id, notes: $0) },
-                                onAddSet: { store.addSet(to: exercise.id) },
-                                onDeleteSet: { setID in
-                                    guard let setIndex = exercise.sets.firstIndex(where: { $0.id == setID }) else { return }
-                                    let set = exercise.sets[setIndex]
-                                    Haptics.warning()
-                                    pendingDeletedSet = PendingDeletedSet(
-                                        exerciseID: exercise.id,
-                                        set: set,
-                                        index: setIndex
-                                    )
-                                    pendingDeletedExercise = nil
-                                    showUndoMessage("Set deleted")
-                                    store.removeSet(exerciseID: exercise.id, setID: setID)
-                                },
-                                onToggleSetComplete: { setID in
-                                    guard let set = exercise.sets.first(where: { $0.id == setID }) else { return }
-                                    store.updateSet(
-                                        exerciseID: exercise.id,
-                                        setID: setID,
-                                        isCompleted: !set.isCompleted
-                                    )
-                                },
-                                onUpdateSet: { setID, reps, weight, style in
-                                    store.updateSet(exerciseID: exercise.id, setID: setID, reps: reps, weight: weight, style: style)
-                                }
-                            )
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    guard let index = session.exercises.firstIndex(where: { $0.id == exercise.id }) else { return }
-                                    Haptics.warning()
-                                    pendingDeletedExercise = PendingDeletedExercise(
-                                        exercise: exercise,
-                                        index: index
-                                    )
-                                    pendingDeletedSet = nil
-                                    showUndoMessage("Exercise deleted")
-                                    store.removeActiveExercise(id: exercise.id)
-                                } label: {
-                                    Label("Delete Exercise", systemImage: "trash")
-                                }
-                            }
-                            .listRowInsets(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
-                            .listRowBackground(Color.clear)
-                        }
-
-                        Button {
-                            Haptics.selection()
-                            showExercisePicker = true
-                        } label: {
-                            Text("+ Add Exercise")
-                                .font(.headline.weight(.semibold))
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.vertical, 10)
-                                .foregroundStyle(.white)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [Color.appAccent.opacity(0.95), Color.appAccent.opacity(0.72)],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Section("Run") {
-                        if let run = session.run {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("\(run.mode.rawValue) run")
-                                    .font(.subheadline.weight(.semibold))
-                                Text("Distance: \(run.distanceMiles, specifier: "%.2f") mi")
-                                    .font(.footnote)
-                                Text("Duration: \(formatDuration(run.durationSeconds))")
-                                    .font(.footnote)
-                                if let avgPace = run.avgPaceSecPerMile {
-                                    Text("Avg pace: \(formatPacePerMile(avgPace))")
-                                        .font(.footnote)
-                                }
-                                if !run.splits.isEmpty {
-                                    Text("\(run.splits.count) split\(run.splits.count == 1 ? "" : "s") saved")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if !run.notes.isEmpty {
-                                    Text(run.notes)
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        } else {
-                            Text("No run logged yet")
-                                .foregroundStyle(.secondary)
-                        }
-
-                        VStack(spacing: 8) {
-                            let preferredRunMode = store.state.preferences.defaultRunMode
-                            let alternateRunMode: RunMode = preferredRunMode == .manual ? .gps : .manual
-                            let preferredRunLabel = preferredRunMode == .manual
-                                ? "Add Manual Run"
-                                : (gpsTracker.isTracking ? "Resume GPS Run" : "Start GPS Run")
-                            let alternateRunLabel = alternateRunMode == .manual
-                                ? "Add Manual Run"
-                                : (gpsTracker.isTracking ? "Resume GPS Run" : "Start GPS Run")
-                            let preferredRunIcon = preferredRunMode == .manual ? "figure.run.circle" : "location.circle.fill"
-                            let alternateRunIcon = alternateRunMode == .manual ? "figure.run.circle" : "location.circle.fill"
-
-                            Button {
-                                Haptics.selection()
-                                runEditorRoute = preferredRunMode == .manual ? .manual : .gps
-                            } label: {
-                                Label(
-                                    preferredRunLabel,
-                                    systemImage: preferredRunIcon
-                                )
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-
-                            Button {
-                                Haptics.selection()
-                                runEditorRoute = alternateRunMode == .manual ? .manual : .gps
-                            } label: {
-                                Label(
-                                    alternateRunLabel,
-                                    systemImage: alternateRunIcon
-                                )
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    }
-
-                    Section {
-                        Button {
-                            showFinishAlert = true
-                        } label: {
-                            Text("Finish Session")
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button {
-                            showDiscardSessionAlert = true
-                        } label: {
-                            Text("Discard Session")
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.red)
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    if let undoMessage {
-                        UndoSnackbar(
-                            message: undoMessage,
-                            onUndo: performUndo,
-                            onDismiss: clearUndoState
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-                .safeAreaInset(edge: .bottom) {
-                    if shouldShowMinimizedGPSRunBar {
-                        minimizedGPSRunBar
-                            .padding(.horizontal, 10)
-                            .padding(.bottom, 6)
-                    }
-                }
-                .listStyle(.insetGrouped)
-                .scrollDismissesKeyboard(.interactively)
-                .navigationTitle(session.name.isEmpty ? "Session" : session.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") {
-                            dismissKeyboard()
-                        }
-                    }
-                }
-                .sheet(isPresented: $showExercisePicker) {
-                    ExercisePickerView(
-                        exercises: store.state.exerciseLibrary,
-                        onSelect: { store.addExerciseToActive($0) },
-                        onCreateCustom: { name, category, equipment, defaultSets, defaultReps, defaultWeight in
-                            store.addCustomExerciseToActive(
-                                named: name,
-                                category: category,
-                                equipment: equipment,
-                                defaultSets: defaultSets,
-                                defaultReps: defaultReps,
-                                defaultWeight: defaultWeight
-                            )
-                        }
-                    )
-                }
-                .sheet(item: $runEditorRoute) { route in
-                    RunEntryEditorView(
-                        initialRun: store.state.activeSession?.run,
-                        preferredMode: route.mode,
-                        tracker: gpsTracker,
-                        onMinimizeGPS: {
-                            guard route.mode == .gps else { return }
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                runEditorRoute = nil
-                            }
-                        }
-                    ) {
-                        store.setRunEntry($0)
-                    }
-                    .interactiveDismissDisabled(route.mode == .gps && gpsTracker.isTracking)
-                }
-                .alert("Confirm Discard", isPresented: $showDiscardSessionAlert) {
-                    Button("Cancel", role: .cancel) {}
-                    Button("Discard", role: .destructive) {
-                        Haptics.warning()
-                        gpsTracker.stopTracking()
-                        store.discardActiveSession()
-                        dismiss()
-                    }
-                } message: {
-                    Text("This session and all unsaved changes will be removed.")
-                }
-                .alert("Finish Session", isPresented: $showFinishAlert) {
-                    Button("Cancel", role: .cancel) {}
-                    Button("Finish Session") {
-                        completeSession()
-                    }
-                    Button("Finish + Save as Template") {
-                        templateName = session.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? "New Template"
-                            : session.name
-                        showFinishTemplatePrompt = true
-                    }
-                } message: {
-                    Text("Do you want to save this workout as a template before finishing?")
-                }
-                .alert("Save Template Before Finish", isPresented: $showFinishTemplatePrompt) {
-                    TextField("Template name", text: $templateName)
-                    Button("Cancel", role: .cancel) {}
-                    Button("Save + Finish") {
-                        completeSession(templateNameToSave: templateName)
-                    }
-                } message: {
-                    Text("A template will be saved first, then the session will be completed.")
-                }
+                activeSessionContent(session)
             } else {
                 ContentUnavailableView("No Active Session", systemImage: "figure.strengthtraining.traditional")
             }
+        }
+        .onAppear {
+            syncRunQuickModeIfNeeded()
+        }
+        .onChange(of: store.state.activeSession?.id) { _, _ in
+            syncRunQuickModeIfNeeded()
         }
         .onDisappear {
             undoDismissTask?.cancel()
@@ -3230,6 +2939,273 @@ struct ActiveSessionView: View {
             Button("Done") { dismiss() }
         } message: {
             Text(completionMessage)
+        }
+    }
+
+    private func activeSessionContent(_ session: WorkoutSessionDraft) -> some View {
+        List {
+            Section {
+                sessionHeader(startedAt: session.startedAt)
+
+                TextField(
+                    "Workout name",
+                    text: Binding(
+                        get: { store.state.activeSession?.name ?? "" },
+                        set: { store.renameActiveSession($0) }
+                    )
+                )
+                .font(.subheadline)
+
+                runQuickActionsCard(session: session)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            sessionNotesExpanded.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            let hasSessionNotes = !(store.state.activeSession?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                            Image(systemName: hasSessionNotes ? "note.text" : "square.and.pencil")
+                            Text(hasSessionNotes ? "Edit session note" : "Add session note")
+                            Spacer()
+                            Image(systemName: sessionNotesExpanded ? "chevron.up" : "chevron.down")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    if sessionNotesExpanded {
+                        TextEditor(
+                            text: Binding(
+                                get: { store.state.activeSession?.notes ?? "" },
+                                set: { store.updateActiveSessionNotes($0) }
+                            )
+                        )
+                        .font(.caption2)
+                        .frame(minHeight: 44, maxHeight: 80)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    Text("Saved offline \(store.lastSavedAt.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+
+            Section("Exercises") {
+                ForEach(session.exercises) { exercise in
+                    ExerciseCardView(
+                        exercise: exercise,
+                        previousSets: store.previousSets(for: exercise.name),
+                        onUpdateNotes: { store.updateActiveExerciseNotes(exerciseID: exercise.id, notes: $0) },
+                        onAddSet: { store.addSet(to: exercise.id) },
+                        onDeleteSet: { setID in
+                            guard let setIndex = exercise.sets.firstIndex(where: { $0.id == setID }) else { return }
+                            let set = exercise.sets[setIndex]
+                            Haptics.warning()
+                            pendingDeletedSet = PendingDeletedSet(
+                                exerciseID: exercise.id,
+                                set: set,
+                                index: setIndex
+                            )
+                            pendingDeletedExercise = nil
+                            showUndoMessage("Set deleted")
+                            store.removeSet(exerciseID: exercise.id, setID: setID)
+                        },
+                        onToggleSetComplete: { setID in
+                            guard let set = exercise.sets.first(where: { $0.id == setID }) else { return }
+                            store.updateSet(
+                                exerciseID: exercise.id,
+                                setID: setID,
+                                isCompleted: !set.isCompleted
+                            )
+                        },
+                        onUpdateSet: { setID, reps, weight, style in
+                            store.updateSet(exerciseID: exercise.id, setID: setID, reps: reps, weight: weight, style: style)
+                        }
+                    )
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            guard let index = session.exercises.firstIndex(where: { $0.id == exercise.id }) else { return }
+                            Haptics.warning()
+                            pendingDeletedExercise = PendingDeletedExercise(
+                                exercise: exercise,
+                                index: index
+                            )
+                            pendingDeletedSet = nil
+                            showUndoMessage("Exercise deleted")
+                            store.removeActiveExercise(id: exercise.id)
+                        } label: {
+                            Label("Delete Exercise", systemImage: "trash")
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
+                    .listRowBackground(Color.clear)
+                }
+
+                PrimaryButton("Add Exercise") {
+                    Haptics.selection()
+                    showExercisePicker = true
+                }
+                .accessibilityHint("Opens the exercise library")
+            }
+
+            Section("Run Summary") {
+                if let run = session.run {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("\(run.mode.rawValue) run")
+                            .font(.subheadline.weight(.semibold))
+
+                        HStack(spacing: 10) {
+                            Label("\(run.distanceMiles, specifier: "%.2f") mi", systemImage: "ruler")
+                            Label(formatDuration(run.durationSeconds), systemImage: "timer")
+                            if let avgPace = run.avgPaceSecPerMile {
+                                Label(formatPacePerMile(avgPace), systemImage: "speedometer")
+                            }
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+
+                        if !run.splits.isEmpty {
+                            Text("\(run.splits.count) split\(run.splits.count == 1 ? "" : "s") saved")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        if !run.notes.isEmpty {
+                            Text(run.notes)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(10)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: AppUI.CornerRadius.medium, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppUI.CornerRadius.medium, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: AppUI.Stroke.hairline)
+                    )
+                } else {
+                    Text("No run logged yet. Use the run quick action above to add one.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                Button {
+                    showFinishAlert = true
+                } label: {
+                    Text("Finish Session")
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    showDiscardSessionAlert = true
+                } label: {
+                    Text("Discard Session")
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let undoMessage {
+                UndoSnackbar(
+                    message: undoMessage,
+                    onUndo: performUndo,
+                    onDismiss: clearUndoState
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if shouldShowMinimizedGPSRunBar {
+                minimizedGPSRunBar
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 6)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle(session.name.isEmpty ? "Session" : session.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    dismissKeyboard()
+                }
+            }
+        }
+        .sheet(isPresented: $showExercisePicker) {
+            ExercisePickerView(
+                exercises: store.state.exerciseLibrary,
+                onSelect: { store.addExerciseToActive($0) },
+                onCreateCustom: { name, category, equipment, defaultSets, defaultReps, defaultWeight in
+                    store.addCustomExerciseToActive(
+                        named: name,
+                        category: category,
+                        equipment: equipment,
+                        defaultSets: defaultSets,
+                        defaultReps: defaultReps,
+                        defaultWeight: defaultWeight
+                    )
+                }
+            )
+        }
+        .sheet(item: $runEditorRoute) { route in
+            RunEntryEditorView(
+                initialRun: store.state.activeSession?.run,
+                preferredMode: route.mode,
+                tracker: gpsTracker,
+                onMinimizeGPS: {
+                    guard route.mode == .gps else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        runEditorRoute = nil
+                    }
+                }
+            ) {
+                store.setRunEntry($0)
+            }
+            .interactiveDismissDisabled(route.mode == .gps && gpsTracker.isTracking)
+        }
+        .alert("Confirm Discard", isPresented: $showDiscardSessionAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Discard", role: .destructive) {
+                Haptics.warning()
+                gpsTracker.stopTracking()
+                store.discardActiveSession()
+                dismiss()
+            }
+        } message: {
+            Text("This session and all unsaved changes will be removed.")
+        }
+        .alert("Finish Session", isPresented: $showFinishAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Finish Session") {
+                completeSession()
+            }
+            Button("Finish + Save as Template") {
+                templateName = session.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "New Template"
+                    : session.name
+                showFinishTemplatePrompt = true
+            }
+        } message: {
+            Text("Do you want to save this workout as a template before finishing?")
+        }
+        .alert("Save Template Before Finish", isPresented: $showFinishTemplatePrompt) {
+            TextField("Template name", text: $templateName)
+            Button("Cancel", role: .cancel) {}
+            Button("Save + Finish") {
+                completeSession(templateNameToSave: templateName)
+            }
+        } message: {
+            Text("A template will be saved first, then the session will be completed.")
         }
     }
 
@@ -3247,14 +3223,175 @@ struct ActiveSessionView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
         }
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .appRowStyle(horizontalPadding: AppUI.Spacing.medium, verticalPadding: AppUI.Spacing.medium)
     }
 
     private func formatPacePerMile(_ secondsPerMile: Int) -> String {
         let minutes = secondsPerMile / 60
         let seconds = secondsPerMile % 60
         return String(format: "%d:%02d /mi", minutes, seconds)
+    }
+
+    private struct RunQuickButtonConfiguration {
+        let title: String
+        let systemImage: String
+        let accessibilityHint: String
+    }
+
+    private var effectiveRunQuickMode: RunMode {
+        gpsTracker.isTracking ? .gps : runQuickMode
+    }
+
+    private var runQuickModeBinding: Binding<RunMode> {
+        Binding(
+            get: { effectiveRunQuickMode },
+            set: { newValue in
+                guard !gpsTracker.isTracking else { return }
+                runQuickMode = newValue
+            }
+        )
+    }
+
+    private func runQuickActionsCard(session: WorkoutSessionDraft) -> some View {
+        let isTracking = gpsTracker.isTracking
+        let mode = effectiveRunQuickMode
+        let quickButton = runQuickButtonConfiguration(for: session, mode: mode)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: mode == .gps ? "location.fill" : "figure.run")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(isTracking ? Color.appAccent : .secondary)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        isTracking ? Color.appAccent.opacity(0.2) : Color.white.opacity(0.08),
+                        in: Circle()
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Run")
+                        .font(.subheadline.weight(.semibold))
+                    Text(runQuickSubtitle(for: session))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(runQuickStatusText(for: session))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(isTracking ? Color.appAccent : .secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(
+                        isTracking ? Color.appAccent.opacity(0.2) : Color.white.opacity(0.08),
+                        in: Capsule()
+                    )
+            }
+
+            Picker("Run mode", selection: runQuickModeBinding) {
+                Text("Manual").tag(RunMode.manual)
+                Text("GPS").tag(RunMode.gps)
+            }
+            .pickerStyle(.segmented)
+            .disabled(isTracking)
+            .accessibilityHint(
+                isTracking
+                    ? "GPS mode is locked while a live run is in progress"
+                    : "Choose manual or GPS run entry"
+            )
+
+            PrimaryButton(
+                quickButton.title,
+                systemImage: quickButton.systemImage,
+                accessibilityHintText: quickButton.accessibilityHint
+            ) {
+                openRunEditor(for: mode)
+            }
+        }
+        .padding(AppUI.Spacing.medium)
+        .background(
+            RoundedRectangle(cornerRadius: AppUI.CornerRadius.large, style: .continuous)
+                .fill(isTracking ? Color.appAccent.opacity(0.16) : Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AppUI.CornerRadius.large, style: .continuous)
+                .strokeBorder(
+                    isTracking ? Color.appAccent.opacity(0.42) : Color.white.opacity(0.12),
+                    lineWidth: AppUI.Stroke.hairline
+                )
+        )
+    }
+
+    private func runQuickSubtitle(for session: WorkoutSessionDraft) -> String {
+        if gpsTracker.isTracking {
+            return "Live GPS run in progress"
+        }
+        guard let run = session.run else {
+            return "No run logged yet"
+        }
+        let distanceText = String(format: "%.2f", run.distanceMiles)
+        return "\(run.mode.rawValue) run · \(distanceText) mi · \(formatDuration(run.durationSeconds))"
+    }
+
+    private func runQuickStatusText(for session: WorkoutSessionDraft) -> String {
+        if gpsTracker.isTracking {
+            return "Live"
+        }
+        return session.run == nil ? "Ready" : "Logged"
+    }
+
+    private func runQuickButtonConfiguration(for session: WorkoutSessionDraft, mode: RunMode) -> RunQuickButtonConfiguration {
+        switch mode {
+        case .manual:
+            if session.run?.mode == .manual {
+                return RunQuickButtonConfiguration(
+                    title: "Edit Manual Run",
+                    systemImage: "figure.run",
+                    accessibilityHint: "Opens the manual run entry editor"
+                )
+            }
+            return RunQuickButtonConfiguration(
+                title: "Add Manual Run",
+                systemImage: "figure.run",
+                accessibilityHint: "Opens manual run entry"
+            )
+        case .gps:
+            if gpsTracker.isTracking {
+                return RunQuickButtonConfiguration(
+                    title: "Resume GPS Run",
+                    systemImage: "location.fill",
+                    accessibilityHint: "Opens the live GPS run"
+                )
+            }
+            if session.run?.mode == .gps {
+                return RunQuickButtonConfiguration(
+                    title: "Edit GPS Run",
+                    systemImage: "location",
+                    accessibilityHint: "Opens the saved GPS run"
+                )
+            }
+            return RunQuickButtonConfiguration(
+                title: "Start GPS Run",
+                systemImage: "location",
+                accessibilityHint: "Starts GPS run setup"
+            )
+        }
+    }
+
+    private func openRunEditor(for mode: RunMode) {
+        Haptics.selection()
+        runEditorRoute = mode == .manual ? .manual : .gps
+    }
+
+    private func syncRunQuickModeIfNeeded() {
+        guard let activeSessionID = store.state.activeSession?.id else {
+            runQuickModeSessionID = nil
+            return
+        }
+        guard runQuickModeSessionID != activeSessionID else { return }
+        runQuickMode = store.state.preferences.defaultRunMode
+        runQuickModeSessionID = activeSessionID
     }
 
     private var shouldShowMinimizedGPSRunBar: Bool {
@@ -3303,13 +3440,11 @@ struct ActiveSessionView: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-            )
+            .appRowStyle(horizontalPadding: AppUI.Spacing.medium, verticalPadding: AppUI.Spacing.medium, cornerRadius: AppUI.CornerRadius.large)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Run in progress")
+        .accessibilityHint("Opens the live GPS run screen")
         .simultaneousGesture(
             DragGesture(minimumDistance: 10)
                 .onEnded { value in
@@ -3460,31 +3595,11 @@ struct ExerciseCardView: View {
                 )
             }
 
-            Button {
+            PrimaryButton("Add Set") {
                 Haptics.impact(.light)
                 onAddSet()
-            } label: {
-                Text("+ Add Set")
-                    .appText(.button)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.appAccent.opacity(0.95), Color.appAccent.opacity(0.72)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
             }
-            .foregroundStyle(.white)
-            .buttonStyle(.plain)
+            .accessibilityHint("Adds another set for this exercise")
 
             if notesExpanded {
                 TextEditor(
@@ -3646,7 +3761,7 @@ struct SetRowView: View {
                 Text("\(index)")
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
-                    .frame(width: 40, height: 32)
+                    .frame(width: 40, height: AppUI.Metrics.minimumHitTarget)
                     .background(
                         RoundedRectangle(cornerRadius: 11, style: .continuous)
                             .fill(
@@ -3662,6 +3777,8 @@ struct SetRowView: View {
                             .stroke(set.style.tint.opacity(0.88), lineWidth: 1.1)
                     )
             }
+            .accessibilityLabel("Set \(index), style \(set.style.rawValue)")
+            .accessibilityHint("Double-tap to change set style")
 
             Text(previousText)
                 .font(.caption.weight(.semibold))
@@ -3703,13 +3820,15 @@ struct SetRowView: View {
                 Image(systemName: "checkmark")
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(set.isCompleted ? .white : .white.opacity(0.45))
-                    .frame(width: 28, height: 32)
+                    .frame(width: AppUI.Metrics.minimumHitTarget, height: AppUI.Metrics.minimumHitTarget)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(set.isCompleted ? Color.appAccent.opacity(0.75) : Color.white.opacity(0.08))
                     )
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(set.isCompleted ? "Mark set incomplete" : "Mark set complete")
+            .accessibilityHint("Updates completion status for set \(index)")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -4382,16 +4501,13 @@ struct RunEntryEditorView: View {
             .padding(10)
             .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            Button {
+            PrimaryButton(
+                "Save Run",
+                isDisabled: saveDisabled,
+                accessibilityHintText: "Saves this run entry to the active session"
+            ) {
                 saveRun()
-            } label: {
-                Text("Save Run")
-                    .font(.headline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(saveDisabled)
 
             Button {
                 Haptics.selection()
@@ -4429,11 +4545,11 @@ struct RunEntryEditorView: View {
             .padding(14)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         } else if tracker.authorizationStatus == .notDetermined {
-            Button("Allow Location") {
+            PrimaryButton("Allow Location") {
                 tracker.requestPermission()
             }
-            .buttonStyle(.borderedProminent)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityHint("Requests permission for GPS tracking")
         }
     }
 
@@ -5046,6 +5162,7 @@ struct TemplatesView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
+                        .appRowStyle(horizontalPadding: AppUI.Spacing.medium, verticalPadding: AppUI.Spacing.medium)
                     }
                     .swipeActions {
                         Button(role: .destructive) {
@@ -5099,6 +5216,9 @@ struct TemplatesView: View {
                 .background(isSelected ? Color.appAccent.opacity(0.25) : Color.secondary.opacity(0.16), in: Capsule())
         }
         .buttonStyle(.plain)
+        .frame(minHeight: AppUI.Metrics.minimumHitTarget)
+        .accessibilityLabel("\(title) folder filter")
+        .accessibilityHint(isSelected ? "Currently selected" : "Filters templates by this folder")
     }
 }
 
@@ -5315,9 +5435,10 @@ struct TemplateEditorView: View {
             Spacer()
             Button(action: onMinus) {
                 Image(systemName: "minus")
-                    .frame(width: 28, height: 28)
+                    .frame(width: AppUI.Metrics.minimumHitTarget, height: AppUI.Metrics.minimumHitTarget)
             }
             .buttonStyle(.bordered)
+            .accessibilityLabel("Decrease \(title.lowercased())")
 
             Text("\(value)")
                 .font(.headline.monospacedDigit())
@@ -5325,9 +5446,10 @@ struct TemplateEditorView: View {
 
             Button(action: onPlus) {
                 Image(systemName: "plus")
-                    .frame(width: 28, height: 28)
+                    .frame(width: AppUI.Metrics.minimumHitTarget, height: AppUI.Metrics.minimumHitTarget)
             }
             .buttonStyle(.bordered)
+            .accessibilityLabel("Increase \(title.lowercased())")
         }
     }
 }
@@ -5524,10 +5646,12 @@ struct HistoryMonthCalendarView: View {
                 Button(action: onPreviousMonth) {
                     Image(systemName: "chevron.left")
                         .font(.caption.weight(.bold))
-                        .frame(width: 30, height: 30)
+                        .frame(width: AppUI.Metrics.minimumHitTarget, height: AppUI.Metrics.minimumHitTarget)
                         .background(Color.white.opacity(0.08), in: Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Previous month")
+                .accessibilityHint("Shows the prior month")
 
                 Spacer()
 
@@ -5539,10 +5663,12 @@ struct HistoryMonthCalendarView: View {
                 Button(action: onNextMonth) {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.bold))
-                        .frame(width: 30, height: 30)
+                        .frame(width: AppUI.Metrics.minimumHitTarget, height: AppUI.Metrics.minimumHitTarget)
                         .background(Color.white.opacity(0.08), in: Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Next month")
+                .accessibilityHint("Shows the next month")
             }
 
             HStack(spacing: 0) {
@@ -5568,6 +5694,10 @@ struct HistoryMonthCalendarView: View {
         }
         .padding(12)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: AppUI.Stroke.hairline)
+        )
     }
 
     private func dayCell(for date: Date) -> some View {
@@ -5615,6 +5745,7 @@ struct SessionRowView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
+        .appRowStyle(horizontalPadding: AppUI.Spacing.medium, verticalPadding: AppUI.Spacing.medium)
     }
 }
 
@@ -5889,8 +6020,9 @@ struct ProgressView: View {
                     bodyWeightCard
                 }
             }
-            .padding()
         }
+        .safeAreaPadding(.horizontal, AppUI.Spacing.screenHorizontal)
+        .safeAreaPadding(.bottom, AppUI.Spacing.screenBottom)
         .navigationTitle("Progress")
         .sheet(isPresented: $showBodyWeightLogSheet) {
             BodyWeightLogSheet(unit: store.state.preferences.measurementSystem) { value, recordedAt, note in
@@ -5917,20 +6049,19 @@ struct ProgressView: View {
     private var summaryCards: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
-                StatTile(title: "Sessions", value: "\(store.state.sessions.count)")
-                StatTile(title: "Templates", value: "\(store.state.templates.count)")
+                StatChip(title: "Sessions", value: "\(store.state.sessions.count)")
+                StatChip(title: "Templates", value: "\(store.state.templates.count)")
             }
             HStack(spacing: 10) {
-                StatTile(title: "Total Volume", value: shortMass(store.totalVolume))
-                StatTile(title: "Run Distance", value: "\(String(format: "%.1f", store.totalRunDistanceMiles)) mi")
+                StatChip(title: "Total Volume", value: shortMass(store.totalVolume))
+                StatChip(title: "Run Distance", value: "\(String(format: "%.1f", store.totalRunDistanceMiles)) mi")
             }
         }
     }
 
     private var exerciseProgressCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Strength Progress")
-                .font(.headline)
+            SectionHeader("Strength Progress")
 
             Picker("Exercise", selection: $selectedExercise) {
                 ForEach(store.exerciseNamesWithHistory, id: \.self) { name in
@@ -5965,8 +6096,7 @@ struct ProgressView: View {
     private var runProgressCard: some View {
         let runSessions = store.sessionsNewestFirst.filter { ($0.run?.distanceMiles ?? 0) > 0 }
         return VStack(alignment: .leading, spacing: 10) {
-            Text("Running Distance")
-                .font(.headline)
+            SectionHeader("Running Distance")
 
             if runSessions.isEmpty {
                 Text("Log a run inside a session to see your trend.")
@@ -5989,8 +6119,7 @@ struct ProgressView: View {
 
     private var prTimelineCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("PR Timeline")
-                .font(.headline)
+            SectionHeader("PR Timeline")
 
             if achievementTimeline.isEmpty {
                 Text("New PRs will appear here.")
@@ -6036,12 +6165,11 @@ struct ProgressView: View {
                     }
                 }
                 Spacer()
-                Button {
+                PrimaryButton("Log Weight", systemImage: "plus.circle.fill") {
                     showBodyWeightLogSheet = true
-                } label: {
-                    Label("Log Weight", systemImage: "plus.circle.fill")
                 }
-                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: 150)
+                .accessibilityHint("Opens body weight logging form")
             }
 
             if bodyWeightPoints30Days.isEmpty {
@@ -6092,8 +6220,7 @@ struct ProgressView: View {
                             Text(formatWeightMeasurement(entry.weightKg, as: units))
                                 .font(.subheadline.weight(.semibold).monospacedDigit())
                         }
-                        .padding(10)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .appRowStyle(horizontalPadding: AppUI.Spacing.medium, verticalPadding: AppUI.Spacing.medium, cornerRadius: AppUI.CornerRadius.small)
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
                                 store.deleteBodyWeight(id: entry.id)
@@ -6264,6 +6391,8 @@ struct SettingsView: View {
             }
 
             Section("Data") {
+                DataTransferSectionView()
+
                 Text("Offline-first storage is enabled by default.")
                     .foregroundStyle(.secondary)
                 Text("Garmin sync is not wired yet. Data models already include running metrics for future integration.")
@@ -6291,29 +6420,6 @@ struct SettingsView: View {
                 locationAuthorizationStatus = CLLocationManager().authorizationStatus
             }
         }
-    }
-}
-
-// MARK: - View Styling Helpers
-
-extension View {
-    func glassCard() -> some View {
-        self
-            .padding(14)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-            )
-    }
-
-    func glassField() -> some View {
-        self
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-            )
     }
 }
 
